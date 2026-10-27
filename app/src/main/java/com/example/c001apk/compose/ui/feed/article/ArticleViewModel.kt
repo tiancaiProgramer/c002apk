@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.example.c001apk.compose.logic.repository.NetworkRepo
+import com.example.c001apk.compose.logic.repository.RecentEmojiRepo
 import com.example.c001apk.compose.util.CookieUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -26,6 +27,8 @@ internal data class ArticleEditorState(
     val error: String? = null,
     val captcha: ByteArray? = null,
     val createdId: String? = null,
+    val focusBlockId: String? = null,
+    val focusOffset: Int = 0,
 )
 
 @HiltViewModel
@@ -33,7 +36,9 @@ class ArticleViewModel @Inject constructor(
     application: Application,
     private val network: NetworkRepo,
     private val savedState: SavedStateHandle,
+    private val recentEmojiRepo: RecentEmojiRepo,
 ) : AndroidViewModel(application) {
+    internal val recentEmojis = recentEmojiRepo.loadAllListFlow()
     private val owner = CookieUtil.uid
     private val ownerToken = CookieUtil.token
     private val store = ArticleDraftStore(application, owner)
@@ -81,23 +86,85 @@ class ArticleViewModel @Inject constructor(
 
     internal fun beginPick(after: String?) { savedState["insertAfter"] = after }
 
+    internal fun setCaret(id: String, start: Int, end: Int) {
+        savedState["caretBlock"] = id
+        savedState["caretStart"] = start
+        savedState["caretEnd"] = end
+    }
+
+    internal fun currentBlock(): ArticleBlock? {
+        val id: String? = savedState["caretBlock"]
+        return state.value.draft.blocks.firstOrNull { it.id == id }
+            ?: state.value.draft.blocks.lastOrNull { it.type == "text" }
+    }
+
+    internal fun captureImageInsertion() {
+        val block = currentBlock()
+        val sameBlock = savedState.get<String>("caretBlock") == block?.id
+        savedState["insertAfter"] = block?.id
+        savedState["insertStart"] = if (sameBlock) savedState.get<Int>("caretStart") ?: Int.MAX_VALUE else Int.MAX_VALUE
+        savedState["insertEnd"] = if (sameBlock) savedState.get<Int>("caretEnd") ?: Int.MAX_VALUE else Int.MAX_VALUE
+    }
+
+    internal fun insertText(text: String) {
+        val block = currentBlock()
+        var focusId: String? = null
+        var offset = 0
+        edit { draft ->
+            if (block?.type == "text") {
+                val sameBlock = savedState.get<String>("caretBlock") == block.id
+                val a = (if (sameBlock) savedState.get<Int>("caretStart") ?: block.text.length else block.text.length).coerceIn(0, block.text.length)
+                val b = (if (sameBlock) savedState.get<Int>("caretEnd") ?: a else a).coerceIn(0, block.text.length)
+                val start = minOf(a, b)
+                val end = maxOf(a, b)
+                focusId = block.id; offset = start + text.length
+                draft.copy(blocks = draft.blocks.map {
+                    if (it.id == block.id) it.copy(text = it.text.replaceRange(start, end, text)) else it
+                })
+            } else {
+                val paragraph = ArticleBlock(text = text)
+                focusId = paragraph.id; offset = text.length
+                draft.insertAfter(block?.id, listOf(paragraph))
+            }
+        }
+        focusId?.let {
+            setCaret(it, offset, offset)
+            mutableState.value = mutableState.value.copy(focusBlockId = it, focusOffset = offset)
+        }
+    }
+
+    internal fun consumeFocus() { mutableState.value = mutableState.value.copy(focusBlockId = null) }
+
+    internal fun insertEmoji(value: String) {
+        insertText(value)
+        viewModelScope.launch(Dispatchers.IO) {
+            recentEmojiRepo.saveEmoji(value)
+            recentEmojiRepo.updateEmoji(value)
+        }
+    }
+
     internal fun importImages(uris: List<Uri>, cover: Boolean = false) {
         if (uris.isEmpty() || mutableState.value.busy || !mutableState.value.ready) return
         val before = mutableState.value.draft
         val after: String? = savedState["insertAfter"]
+        val start = savedState.get<Int>("insertStart") ?: Int.MAX_VALUE
+        val end = savedState.get<Int>("insertEnd") ?: Int.MAX_VALUE
         mutableState.value = mutableState.value.copy(busy = true, progress = "正在读取图片…", error = null)
         viewModelScope.launch {
             try {
                 check(sameAccount()) { "登录状态已变化，请重新打开编辑页" }
                 val local = withContext(Dispatchers.IO) { uris.map(store::importImage) }
                 check(sameAccount()) { "登录状态已变化，请重新打开编辑页" }
+                val imageBlocks = local.map { ArticleBlock(type = "image", image = it) }
                 val next = if (cover) before.copy(cover = local.first())
-                else before.insertAfter(after, local.map { ArticleBlock(type = "image", image = it) } + ArticleBlock())
+                else before.insertAtCursor(after, start, end, imageBlocks)
                 if (cover) uploaded = uploaded - ArticlePayload.COVER
                 store.save(next)
                 withContext(Dispatchers.IO) { store.prune(next) }
                 pendingForm = null
-                mutableState.value = mutableState.value.copy(draft = next)
+                val target = if (cover) null else next.blocks.getOrNull(next.blocks.indexOfLast { it.id == imageBlocks.last().id } + 1)?.id
+                if (target != null) setCaret(target, 0, 0)
+                mutableState.value = mutableState.value.copy(draft = next, focusBlockId = target, focusOffset = 0)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { fail(e.message ?: "读取图片失败") }
             finally { mutableState.value = mutableState.value.copy(busy = false, progress = "") }

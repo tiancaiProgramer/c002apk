@@ -28,6 +28,17 @@ data class ArticleDraft(
         return copy(blocks = blocks.toMutableList().apply { addAll(index, added) })
     }
 
+    fun insertAtCursor(id: String?, start: Int, end: Int, added: List<ArticleBlock>): ArticleDraft {
+        val index = blocks.indexOfFirst { it.id == id && it.type == "text" }
+        if (index < 0) return insertAfter(id, added + ArticleBlock())
+        val block = blocks[index]
+        val before = minOf(start, end).coerceIn(0, block.text.length)
+        val after = maxOf(start, end).coerceIn(before, block.text.length)
+        val replacement = listOf(block.copy(text = block.text.substring(0, before))) +
+            added + ArticleBlock(text = block.text.substring(after))
+        return copy(blocks = blocks.take(index) + replacement + blocks.drop(index + 1))
+    }
+
     fun move(id: String, offset: Int): ArticleDraft {
         val from = blocks.indexOfFirst { it.id == id }
         val to = from + offset

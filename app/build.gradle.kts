@@ -150,6 +150,8 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+    // Espresso requires forceEnableAppTracing(), absent from the app's transitive 1.0.0.
+    debugImplementation("androidx.tracing:tracing:1.1.0")
     testImplementation(libs.junit)
 
     implementation(libs.androidx.activity.compose)

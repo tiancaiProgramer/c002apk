@@ -1,8 +1,8 @@
 package com.example.c001apk.compose.ui.feed.article
 
 import android.content.Intent
+import android.app.Activity
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -12,14 +12,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.outlined.ArrowDownward
-import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.*
@@ -28,16 +28,33 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.c001apk.compose.ui.component.BackButton
+import com.example.c001apk.compose.ui.component.LinkText
 import com.example.c001apk.compose.ui.component.rememberHapticClick
+import com.example.c001apk.compose.ui.feed.reply.AtTopicActivity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import com.example.c001apk.compose.R
+import com.example.c001apk.compose.logic.providable.LocalUserPreferences
+import com.example.c001apk.compose.logic.datastore.UserPreferencesCompat
 import com.example.c001apk.compose.ui.theme.C001apkComposeTheme
 import com.example.c001apk.compose.util.CookieUtil
 import com.example.c001apk.compose.util.makeToast
+import com.example.c001apk.compose.util.openInBrowser
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -49,6 +66,13 @@ class ArticleActivity : ComponentActivity() {
         if (!CookieUtil.isLogin) { makeToast("请先登录"); finish(); return }
         enableEdgeToEdge()
         setContent {
+            val uiPreferences = UserPreferencesCompat.default().copy(
+                fontScale = CookieUtil.fontScale, contentScale = CookieUtil.contentScale,
+                showEmoji = CookieUtil.showEmoji, imageFilter = CookieUtil.imageFilter,
+                hapticFeedback = CookieUtil.hapticFeedback, hapticStrength = CookieUtil.hapticStrength,
+                customHaptics = CookieUtil.customHaptics, reverseHapticEffects = CookieUtil.reverseHapticEffects,
+            )
+            CompositionLocalProvider(LocalUserPreferences provides uiPreferences) {
             C001apkComposeTheme(
                 darkTheme = CookieUtil.isDarkMode,
                 themeType = CookieUtil.themeType,
@@ -68,6 +92,7 @@ class ArticleActivity : ComponentActivity() {
                     }
                 }
             }
+            }
         }
     }
 }
@@ -81,6 +106,13 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     var showMenu by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
     var confirmPublish by rememberSaveable { mutableStateOf(false) }
+    var showEmoji by rememberSaveable { mutableStateOf(false) }
+    val editorListState = rememberLazyListState()
+    val context = LocalContext.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    LaunchedEffect(imeVisible) { if (imeVisible) showEmoji = false }
+    val recent by viewModel.recentEmojis.collectAsStateWithLifecycle(initialValue = emptyList())
     val enabled = state.ready && !state.busy && state.createdId == null
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
         viewModel.importImages(it)
@@ -88,30 +120,57 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         it?.let { uri -> viewModel.importImages(listOf(uri), cover = true) }
     }
-    fun pickAfter(id: String?) {
-        viewModel.beginPick(id)
-        picker.launch(arrayOf("image/*"))
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) {
+        it?.let { uri -> viewModel.importImages(listOf(uri)) }
+    }
+    val mentionPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) result.data?.getStringExtra("data")?.let(viewModel::insertText)
+    }
+    fun pickAtCursor(files: Boolean) {
+        showEmoji = false
+        keyboard?.hide()
+        viewModel.captureImageInsertion()
+        if (files) picker.launch(arrayOf("image/*")) else imagePicker.launch("image/*")
+    }
+    LaunchedEffect(state.focusBlockId) {
+        state.focusBlockId?.let { id ->
+            val index = draft.blocks.indexOfFirst { it.id == id }
+            if (index >= 0) editorListState.animateScrollToItem(index + 2)
+        }
     }
 
     BackHandler {
-        if (preview && !state.busy) preview = false else onBack()
+        if (showEmoji) showEmoji = false
+        else if (preview && !state.busy) preview = false else onBack()
     }
     Scaffold(
         modifier = Modifier.fillMaxSize().imePadding(),
         topBar = {
             TopAppBar(
-                title = { Text(if (preview) "图文预览" else "写图文") },
-                navigationIcon = { BackButton { if (preview) preview = false else onBack() } },
+                title = { Text(if (preview) "图文预览" else "发布图文", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    if (preview) BackButton { preview = false }
+                    else IconButton(onClick = onBack) { Icon(Icons.Default.Close, "关闭编辑器") }
+                },
                 actions = {
                     TextButton(enabled = enabled, onClick = rememberHapticClick { preview = !preview }) {
                         Text(if (preview) "编辑" else "预览")
                     }
-                    TextButton(enabled = enabled, onClick = rememberHapticClick { confirmPublish = true }) { Text("发布") }
+                    Button(enabled = enabled, shape = MaterialTheme.shapes.extraSmall,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        onClick = rememberHapticClick { confirmPublish = true }) { Text("发布") }
                     Box {
                         IconButton(enabled = !state.busy, onClick = { showMenu = true }) {
                             Icon(Icons.Outlined.MoreVert, "更多选项")
                         }
                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            DropdownMenuItem(text = { Text("上移当前段") }, enabled = enabled,
+                                onClick = { showMenu = false; viewModel.currentBlock()?.let { viewModel.move(it.id, -1) } })
+                            DropdownMenuItem(text = { Text("下移当前段") }, enabled = enabled,
+                                onClick = { showMenu = false; viewModel.currentBlock()?.let { viewModel.move(it.id, 1) } })
+                            DropdownMenuItem(text = { Text("删除当前段") }, enabled = enabled,
+                                onClick = { showMenu = false; viewModel.currentBlock()?.let { viewModel.remove(it.id) } })
+                            HorizontalDivider()
                             DropdownMenuItem(text = { Text("清空草稿") }, onClick = { showMenu = false; discard = true })
                         }
                     }
@@ -120,22 +179,35 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
         },
         bottomBar = {
             if (!preview && state.ready) {
-                Surface(tonalElevation = 3.dp) {
-                    Column(Modifier.navigationBarsPadding().fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Surface {
+                    Column(Modifier.navigationBarsPadding().fillMaxWidth()) {
+                        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = draft.onlySelf, enabled = enabled,
+                                onCheckedChange = { value -> viewModel.edit { it.copy(onlySelf = value) } })
+                            Text("仅自己可见", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        HorizontalDivider()
                         if (state.busy) {
                             LinearProgressIndicator(Modifier.fillMaxWidth())
-                            Text(state.progress, modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                            Text(state.progress, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                         } else {
-                            Text("草稿自动保存在本机 · 每段下方可插入文字或图片", style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                TextButton(enabled = enabled, onClick = { viewModel.addText(draft.blocks.lastOrNull()?.id) }) {
-                                    Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("添加文字")
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                ArticleToolButton(R.drawable.outline_emoji_emotions_24, "表情", enabled) {
+                                    showEmoji = !showEmoji
+                                    if (showEmoji) keyboard?.hide() else keyboard?.show()
                                 }
-                                TextButton(enabled = enabled, onClick = { pickAfter(draft.blocks.lastOrNull()?.id) }) {
-                                    Icon(Icons.Outlined.Image, null); Spacer(Modifier.width(4.dp)); Text("添加图片")
+                                ArticleToolButton(R.drawable.outline_image_24, "插入图片", enabled) { pickAtCursor(false) }
+                                ArticleToolButton(R.drawable.outline_note_alt_24, "从文件插入图片", enabled) { pickAtCursor(true) }
+                                ArticleToolButton(R.drawable.outline_alternate_email_24, "提及用户", enabled) {
+                                    showEmoji = false; keyboard?.hide()
+                                    mentionPicker.launch(Intent(context, AtTopicActivity::class.java).putExtra("type", "user"))
+                                }
+                                ArticleToolButton(R.drawable.outline_tag_24, "插入话题", enabled) {
+                                    showEmoji = false; keyboard?.hide()
+                                    mentionPicker.launch(Intent(context, AtTopicActivity::class.java).putExtra("type", "topic"))
                                 }
                             }
+                            if (showEmoji) ArticleEmojiPanel(recent.map { it.data }, viewModel::insertEmoji)
                         }
                     }
                 }
@@ -154,18 +226,14 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
                 ArticlePreview(draft)
             } else {
                 LazyColumn(
+                    state = editorListState,
                     modifier = Modifier.widthIn(max = 840.dp).fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    item(key = "title") {
-                        OutlinedTextField(value = draft.title, onValueChange = { value -> viewModel.edit { it.copy(title = value) } },
-                            modifier = Modifier.fillMaxWidth(), label = { Text("标题") }, enabled = enabled,
-                            textStyle = MaterialTheme.typography.titleLarge, minLines = 1, maxLines = 3)
-                    }
                     item(key = "cover") {
                         if (draft.cover.isNotBlank()) {
-                            OutlinedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth()) {
                                 AsyncImage(draft.cover, "题图", modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp), contentScale = ContentScale.Fit)
                                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
                                     TextButton(enabled = enabled, onClick = { coverPicker.launch(arrayOf("image/*")) }) { Text("更换题图") }
@@ -173,26 +241,39 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
                                 }
                             }
                         } else {
-                            OutlinedButton(enabled = enabled, onClick = { coverPicker.launch(arrayOf("image/*")) }) {
-                                Icon(Icons.Outlined.Image, null); Spacer(Modifier.width(8.dp)); Text("添加题图（可选）")
+                            Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.small,
+                                modifier = Modifier.fillMaxWidth().height(132.dp).clickable(enabled = enabled) {
+                                    coverPicker.launch(arrayOf("image/*"))
+                                }) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                    Text("＋ 添加题图", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                    Text("无题图会导致无法获得推荐", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                     }
-                    itemsIndexed(draft.blocks, key = { _, block -> block.id }) { index, block ->
-                        ArticleBlockEditor(block, index, draft.blocks.size, enabled,
-                            onChange = { next -> viewModel.updateBlock(block.id) { next } },
-                            onMove = { viewModel.move(block.id, it) },
-                            onDelete = { viewModel.remove(block.id) },
-                            onAddText = { viewModel.addText(block.id) },
-                            onAddImages = { pickAfter(block.id) },
-                        )
+                    item(key = "title") {
+                        BasicTextField(value = draft.title, onValueChange = { value -> viewModel.edit { it.copy(title = value) } },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), enabled = enabled,
+                            textStyle = MaterialTheme.typography.headlineSmall.copy(color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold), cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            decorationBox = { inner -> Box {
+                                if (draft.title.isEmpty()) Text("添加标题", style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                inner()
+                            } })
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
-                    item(key = "visibility") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = draft.onlySelf, enabled = enabled,
-                                onCheckedChange = { value -> viewModel.edit { it.copy(onlySelf = value) } })
-                            Text("仅自己可见", style = MaterialTheme.typography.bodyMedium)
-                        }
+                    itemsIndexed(draft.blocks, key = { _, block -> block.id }) { _, block ->
+                        ArticleBlockEditor(block, enabled, state.focusBlockId == block.id, state.focusOffset,
+                            onChange = { next -> viewModel.updateBlock(block.id) { next } },
+                            onCaret = { start, end -> viewModel.setCaret(block.id, start, end) },
+                            onFocusConsumed = viewModel::consumeFocus,
+                            onDelete = { viewModel.remove(block.id) },
+                            minLines = if (draft.blocks.size == 1) 8 else 1,
+                        )
                     }
                 }
             }
@@ -236,38 +317,81 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
 }
 
 @Composable
+private fun RowScope.ArticleToolButton(drawable: Int, label: String, enabled: Boolean, onClick: () -> Unit) {
+    IconButton(enabled = enabled, onClick = rememberHapticClick(onClick = onClick), modifier = Modifier.weight(1f)) {
+        Icon(painterResource(drawable), label, modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable
 private fun ArticleBlockEditor(
-    block: ArticleBlock, index: Int, count: Int, enabled: Boolean,
-    onChange: (ArticleBlock) -> Unit, onMove: (Int) -> Unit, onDelete: () -> Unit,
-    onAddText: () -> Unit, onAddImages: () -> Unit,
+    block: ArticleBlock, enabled: Boolean, requestFocus: Boolean, focusOffset: Int,
+    onChange: (ArticleBlock) -> Unit, onCaret: (Int, Int) -> Unit,
+    onFocusConsumed: () -> Unit, onDelete: () -> Unit, minLines: Int,
 ) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (block.type == "text") "文字段落" else "图片", style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                IconButton(enabled = enabled && index > 0, onClick = { onMove(-1) }) { Icon(Icons.Outlined.ArrowUpward, "上移此段") }
-                IconButton(enabled = enabled && index < count - 1, onClick = { onMove(1) }) { Icon(Icons.Outlined.ArrowDownward, "下移此段") }
-                IconButton(enabled = enabled, onClick = onDelete) { Icon(Icons.Outlined.DeleteOutline, "删除此段") }
+    if (block.type == "text") {
+        var input by remember(block.id) { mutableStateOf(TextFieldValue(block.text)) }
+        val requester = remember { FocusRequester() }
+        LaunchedEffect(block.text) {
+            if (input.text != block.text) input = TextFieldValue(block.text,
+                TextRange(input.selection.start.coerceAtMost(block.text.length)))
+        }
+        LaunchedEffect(requestFocus, focusOffset) {
+            if (requestFocus) {
+                input = TextFieldValue(block.text, TextRange(focusOffset.coerceIn(0, block.text.length)))
+                withFrameNanos { }
+                requester.requestFocus()
+                onFocusConsumed()
             }
-            if (block.type == "text") {
-                OutlinedTextField(value = block.text, onValueChange = { onChange(block.copy(text = it)) }, enabled = enabled,
-                    modifier = Modifier.fillMaxWidth(), placeholder = { Text("输入正文…") }, minLines = 3)
-            } else {
-                AsyncImage(block.image, "正文图片", modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 320.dp), contentScale = ContentScale.Fit)
-                OutlinedTextField(value = block.description, onValueChange = { onChange(block.copy(description = it)) }, enabled = enabled,
-                    modifier = Modifier.fillMaxWidth(), label = { Text("图片说明（可选）") })
+        }
+        BasicTextField(value = input, onValueChange = { next ->
+            val changed = next.text != input.text
+            input = next
+            onCaret(next.selection.start, next.selection.end)
+            if (changed) onChange(block.copy(text = next.text))
+        }, enabled = enabled,
+            modifier = Modifier.fillMaxWidth().focusRequester(requester).onFocusChanged {
+                if (it.isFocused) onCaret(input.selection.start, input.selection.end)
+            }.padding(vertical = 8.dp),
+            minLines = minLines,
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            decorationBox = { inner -> Box {
+                if (input.text.isEmpty()) Text("开始写正文…", style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                inner()
+            } })
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.fillMaxWidth()) {
+                AsyncImage(block.image, "正文图片", modifier = Modifier.fillMaxWidth()
+                    .heightIn(min = 100.dp, max = 480.dp).clickable(enabled = enabled) { onCaret(0, 0) },
+                    contentScale = ContentScale.Fit)
+                Surface(shape = MaterialTheme.shapes.extraSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.align(Alignment.TopEnd).size(36.dp)) {
+                    IconButton(enabled = enabled, onClick = onDelete) {
+                        Icon(Icons.Default.Close, "移除正文图片", tint = MaterialTheme.colorScheme.onError)
+                    }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(enabled = enabled, onClick = onAddText) { Text("在此后插入文字") }
-                TextButton(enabled = enabled, onClick = onAddImages) { Text("插入图片") }
-            }
+            BasicTextField(value = block.description, onValueChange = { onChange(block.copy(description = it)) },
+                enabled = enabled, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                    .onFocusChanged { if (it.isFocused) onCaret(0, 0) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.outline,
+                    textAlign = TextAlign.Center), cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                decorationBox = { inner -> Box(contentAlignment = Alignment.Center) {
+                    if (block.description.isEmpty()) Text("添加图片说明", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline)
+                    inner()
+                } })
         }
     }
 }
 
 @Composable
 private fun ArticlePreview(draft: ArticleDraft) {
+    val context = LocalContext.current
     LazyColumn(Modifier.widthIn(max = 840.dp).fillMaxSize(), contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (draft.cover.isNotBlank()) item {
@@ -276,7 +400,9 @@ private fun ArticlePreview(draft: ArticleDraft) {
         item { Text(draft.title.ifBlank { "未填写标题" }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
         itemsIndexed(draft.blocks, key = { _, block -> block.id }) { _, block ->
             if (block.type == "text") {
-                if (block.text.isNotBlank()) Text(block.text, style = MaterialTheme.typography.bodyLarge)
+                if (block.text.isNotBlank()) LinkText(text = block.text, textSize = 16f,
+                    lineSpacingMultiplier = 1.3f, modifier = Modifier.fillMaxWidth(),
+                    onOpenLink = { url, _ -> context.openInBrowser(url) })
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     AsyncImage(block.image, "正文图片", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)

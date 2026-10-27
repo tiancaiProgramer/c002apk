@@ -61,4 +61,19 @@ class ArticlePayloadTest {
         val textOnly = ArticlePayload.build(ArticleDraft(title = "纯文字图文", blocks = listOf(ArticleBlock(text = "正文"))), emptyMap())
         assertEquals("", textOnly["message_cover"])
     }
+
+    @Test fun insertingAtCursorSplitsParagraphAndPreservesTheRestOfTheArticle() {
+        val original = ArticleDraft(title = "光标插图", blocks = listOf(
+            ArticleBlock(id = "paragraph", text = "图片前图片后"), ArticleBlock(id = "next", text = "下一段")))
+        val image = ArticleBlock(id = "inserted-image", type = "image", image = "file:///photo")
+        val inserted = original.insertAtCursor("paragraph", 3, 3, listOf(image))
+        assertEquals(listOf("text", "image", "text", "text"), inserted.blocks.map { it.type })
+        assertEquals("图片前", inserted.blocks[0].text)
+        assertEquals("图片后", inserted.blocks[2].text)
+        assertEquals("下一段", inserted.blocks[3].text)
+        val body = JsonParser.parseString(ArticlePayload.build(inserted, mapOf(image.id to "https://cdn.example/photo.jpg")).getValue("message")).asJsonArray
+        assertEquals("图片前", body[0].asJsonObject["message"].asString)
+        assertEquals("https://cdn.example/photo.jpg", body[1].asJsonObject["url"].asString)
+        assertEquals("图片后", body[2].asJsonObject["message"].asString)
+    }
 }
