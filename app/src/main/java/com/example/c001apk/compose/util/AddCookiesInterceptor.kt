@@ -22,9 +22,9 @@ object AddCookiesInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val builder: Request.Builder = request.newBuilder()
-        val isReply = request.method == "POST" && request.url.host == "api.coolapk.com" &&
-                request.url.encodedPath == "/v6/feed/reply"
-        val deviceCode = if (isReply) {
+        val isFeedWrite = request.method == "POST" && request.url.host == "api.coolapk.com" &&
+                request.url.encodedPath in setOf("/v6/feed/reply", "/v6/feed/createFeed")
+        val deviceCode = if (isFeedWrite) {
             TokenDeviceUtils.withFirstComponent(CookieUtil.xAppDevice, CookieUtil.szlmId)
         } else CookieUtil.xAppDevice
         val token = deviceCode.getTokenV2()

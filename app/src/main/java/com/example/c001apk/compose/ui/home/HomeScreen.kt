@@ -20,12 +20,10 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,7 +60,9 @@ import com.example.c001apk.compose.R
 import com.example.c001apk.compose.logic.model.HomeMenu
 import com.example.c001apk.compose.logic.model.UpdateCheckItem
 import com.example.c001apk.compose.ui.component.rememberHapticClick
+import com.example.c001apk.compose.ui.component.PublishMenuButton
 import com.example.c001apk.compose.ui.feed.reply.ReplyActivity
+import com.example.c001apk.compose.ui.feed.article.ArticleActivity
 import com.example.c001apk.compose.ui.home.app.AppListScreen
 import com.example.c001apk.compose.ui.home.feed.HomeFeedScreen
 import com.example.c001apk.compose.ui.home.topic.HomeTopicScreen
@@ -230,23 +230,16 @@ fun HomeScreen(
                     enter = slideInVertically { it * 2 },
                     exit = slideOutVertically { it * 2 }
                 ) {
-                    FloatingActionButton(
-                        onClick = rememberHapticClick {
-                            val intent = Intent(context, ReplyActivity::class.java)
-                            intent.putExtra("type", "createFeed")
+                    PublishMenuButton(
+                        onFeed = {
+                            val intent = Intent(context, ReplyActivity::class.java).putExtra("type", "createFeed")
                             val animationBundle = ActivityOptionsCompat.makeCustomAnimation(
-                                context,
-                                R.anim.anim_bottom_sheet_slide_up,
-                                R.anim.anim_bottom_sheet_slide_down
+                                context, R.anim.anim_bottom_sheet_slide_up, R.anim.anim_bottom_sheet_slide_down
                             ).toBundle()
                             ContextCompat.startActivity(context, intent, animationBundle)
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = null
-                        )
-                    }
+                        },
+                        onArticle = { context.startActivity(Intent(context, ArticleActivity::class.java)) },
+                    )
                 }
             }
         },

@@ -23,6 +23,9 @@ import kotlinx.coroutines.withContext
  * Created by bggRGjQaUbCoE on 2024/5/7
  */
 object OssUploadUtil {
+    internal const val IMAGE_CALLBACK = "eyJjYWxsYmFja0JvZHlUeXBlIjoiYXBwbGljYXRpb25cL2pzb24iLCJjYWxsYmFja0hvc3QiOiJhcGkuY29vbGFway5jb20iLCJjYWxsYmFja1VybCI6Imh0dHBzOlwvXC9hcGkuY29vbGFway5jb21cL3Y2XC9jYWxsYmFja1wvbW9iaWxlT3NzVXBsb2FkU3VjY2Vzc0NhbGxiYWNrP2NoZWNrQXJ0aWNsZUNvdmVyUmVzb2x1dGlvbj0wJnZlcnNpb25Db2RlPTIxMDIwMzEiLCJjYWxsYmFja0JvZHkiOiJ7XCJidWNrZXRcIjoke2J1Y2tldH0sXCJvYmplY3RcIjoke29iamVjdH0sXCJoYXNQcm9jZXNzXCI6JHt4OnZhcjF9fSJ9"
+    internal const val IMAGE_CALLBACK_VAR = "eyJ4OnZhcjEiOiJmYWxzZSJ9"
+
     suspend fun ossUpload(
         context: Context,
         responseData: OSSUploadPrepareResponse.Data,
@@ -68,9 +71,9 @@ object OssUploadUtil {
                 metadata.contentMD5 = Base64.encodeToString(md5List[index], Base64.DEFAULT).trim()
                 metadata.setHeader(
                     "x-oss-callback",
-                    "eyJjYWxsYmFja0JvZHlUeXBlIjoiYXBwbGljYXRpb25cL2pzb24iLCJjYWxsYmFja0hvc3QiOiJhcGkuY29vbGFway5jb20iLCJjYWxsYmFja1VybCI6Imh0dHBzOlwvXC9hcGkuY29vbGFway5jb21cL3Y2XC9jYWxsYmFja1wvbW9iaWxlT3NzVXBsb2FkU3VjY2Vzc0NhbGxiYWNrP2NoZWNrQXJ0aWNsZUNvdmVyUmVzb2x1dGlvbj0wJnZlcnNpb25Db2RlPTIxMDIwMzEiLCJjYWxsYmFja0JvZHkiOiJ7XCJidWNrZXRcIjoke2J1Y2tldH0sXCJvYmplY3RcIjoke29iamVjdH0sXCJoYXNQcm9jZXNzXCI6JHt4OnZhcjF9fSJ9"
+                    IMAGE_CALLBACK
                 )
-                metadata.setHeader("x-oss-callback-var", "eyJ4OnZhcjEiOiJmYWxzZSJ9")
+                metadata.setHeader("x-oss-callback-var", IMAGE_CALLBACK_VAR)
                 put.metadata = metadata
                 put.callbackParam = object : HashMap<String, String>() {
                     init {
