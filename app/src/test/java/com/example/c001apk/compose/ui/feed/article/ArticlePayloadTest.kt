@@ -76,4 +76,15 @@ class ArticlePayloadTest {
         assertEquals("https://cdn.example/photo.jpg", body[1].asJsonObject["url"].asString)
         assertEquals("图片后", body[2].asJsonObject["message"].asString)
     }
+
+    @Test fun emojiBackspaceKeepsSurrogatePairsAndRemovesOneCustomEmojiAtomically() {
+        val text = "正文😀[哈哈哈]"
+        val first = deleteArticleBackward(text, text.length, text.length, setOf("[哈哈哈]"))
+        assertEquals("正文😀", first.text)
+        val second = deleteArticleBackward(first.text, first.caret, first.caret, emptySet())
+        assertEquals("正文", second.text)
+        assertEquals(2, second.caret)
+        assertEquals(ArticleCursorEdit("", 0), deleteArticleBackward("", 0, 0, emptySet()))
+        assertEquals("文", deleteArticleBackward("正文", 0, 1, emptySet()).text)
+    }
 }

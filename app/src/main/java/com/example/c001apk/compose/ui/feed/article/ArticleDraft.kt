@@ -87,3 +87,16 @@ internal object ArticlePayload {
         )
     }
 }
+
+internal data class ArticleCursorEdit(val text: String, val caret: Int)
+
+internal fun deleteArticleBackward(text: String, start: Int, end: Int, emojiKeys: Set<String>): ArticleCursorEdit {
+    var a = minOf(start, end).coerceIn(0, text.length)
+    val b = maxOf(start, end).coerceIn(a, text.length)
+    if (a == b && a > 0) {
+        val opening = text.lastIndexOf('[', a - 1)
+        a = if (text[a - 1] == ']' && opening >= 0 && text.substring(opening, a) in emojiKeys) opening
+            else text.offsetByCodePoints(a, -1)
+    }
+    return ArticleCursorEdit(text.replaceRange(a, b, ""), a)
+}

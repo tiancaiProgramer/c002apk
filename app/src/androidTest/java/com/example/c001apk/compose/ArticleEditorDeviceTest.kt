@@ -3,6 +3,8 @@ package com.example.c001apk.compose
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
 import android.view.View
@@ -31,6 +33,8 @@ import com.example.c001apk.compose.ui.feed.article.ArticleBlock
 import com.example.c001apk.compose.ui.feed.article.ArticleDraft
 import com.example.c001apk.compose.ui.feed.article.ArticleDraftStore
 import com.example.c001apk.compose.ui.feed.article.ArticleViewModel
+import com.example.c001apk.compose.ui.feed.reply.ReplyActivity
+import com.google.gson.Gson
 import com.example.c001apk.compose.ui.theme.C001apkComposeTheme
 import com.example.c001apk.compose.util.CookieUtil
 import org.junit.After
@@ -155,9 +159,14 @@ class ArticleEditorDeviceTest {
         launchEditor().use { scenario ->
             waitText("图片前图片后")
             instrumentation.runOnMainSync {
-                val node = nodes().first { matchesText(it, "图片前图片后") && it.config.getOrNull(SemanticsActions.SetSelection)?.action != null }
-                node.config.getOrNull(SemanticsActions.RequestFocus)?.action?.invoke()
-                assertTrue(requireNotNull(node.config.getOrNull(SemanticsActions.SetSelection)?.action).invoke(3, 3, false))
+                fun findEditor(view: View): android.widget.EditText? {
+                    if (view is android.widget.EditText && view.text.toString() == "图片前图片后") return view
+                    if (view is ViewGroup) for (i in 0 until view.childCount) findEditor(view.getChildAt(i))?.let { return it }
+                    return null
+                }
+                val field = requireNotNull(roots.firstNotNullOfOrNull { findEditor(it.view) })
+                field.requestFocus()
+                field.setSelection(3)
             }
             scenario.onActivity { activity ->
                 val model = ViewModelProvider(activity)[ArticleViewModel::class.java]
@@ -173,6 +182,43 @@ class ArticleEditorDeviceTest {
             assertTrue(store.file(actual.blocks[1].image).isFile)
         }
         source.delete()
+    }
+
+    @Test fun captureExistingDynamicEditorStyleWithoutPublishing() {
+        launchEditor().use { scenario ->
+            val monitor = instrumentation.addMonitor(ReplyActivity::class.java.name, null, false)
+            scenario.onActivity { activity ->
+                activity.startActivity(Intent(activity, ReplyActivity::class.java).putExtra("type", "createFeed"))
+            }
+            val reply = monitor.waitForActivityWithTimeout(8000) as? ReplyActivity
+                ?: error("Existing dynamic editor did not start")
+            try {
+                SystemClock.sleep(1300)
+                instrumentation.runOnMainSync {
+                    val editor = reply.findViewById<android.widget.EditText>(R.id.editText)
+                    editor.setText("这是动态编辑器的样式对照。\n这是一段不会发布的测试文字。")
+                    reply.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                        .hideSoftInputFromWindow(editor.windowToken, 0)
+                    val panel = reply.findViewById<View>(R.id.inputLayout)
+                    val metrics = reply.resources.displayMetrics
+                    val details = mapOf(
+                        "title_sp" to reply.findViewById<TextView>(R.id.title).textSize / metrics.scaledDensity,
+                        "publish_sp" to reply.findViewById<TextView>(R.id.publish).textSize / metrics.scaledDensity,
+                        "body_sp" to editor.textSize / metrics.scaledDensity,
+                        "panel_color_argb" to (panel.background as? GradientDrawable)?.color?.defaultColor,
+                        "panel_corner_radii_px" to (panel.background as? GradientDrawable)?.cornerRadii?.toList(),
+                        "density" to metrics.density,
+                        "toolbar_height_dp" to reply.findViewById<View>(R.id.imageBtn).height / metrics.density,
+                    )
+                    File(context.filesDir, "dynamic-ui-reference.json").writeText(Gson().toJson(details))
+                }
+                SystemClock.sleep(350)
+                screenshot("dynamic-editor-reference.png")
+            } finally {
+                instrumentation.runOnMainSync { reply.finish() }
+                instrumentation.removeMonitor(monitor)
+            }
+        }
     }
 
     private fun launchEditor(): EditorHost {
@@ -230,8 +276,8 @@ class ArticleEditorDeviceTest {
     }
 
     private fun waitText(text: String) {
-        fun nativeText(view: View): Boolean = (view is TextView && view.text.toString() == text) ||
-            (view is ViewGroup && (0 until view.childCount).any { nativeText(view.getChildAt(it)) })
+        fun nativeText(view: View): Boolean = view.isShown && ((view is TextView && view.text.toString() == text) ||
+            (view is ViewGroup && (0 until view.childCount).any { nativeText(view.getChildAt(it)) }))
         val deadline = SystemClock.elapsedRealtime() + 8000
         while (SystemClock.elapsedRealtime() < deadline) {
             var found = false

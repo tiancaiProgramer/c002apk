@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.c001apk.compose.logic.repository.NetworkRepo
 import com.example.c001apk.compose.logic.repository.RecentEmojiRepo
 import com.example.c001apk.compose.util.CookieUtil
+import com.example.c001apk.compose.util.EmojiUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -135,12 +136,33 @@ class ArticleViewModel @Inject constructor(
 
     internal fun consumeFocus() { mutableState.value = mutableState.value.copy(focusBlockId = null) }
 
+    internal fun focusParagraph() {
+        val block = currentBlock()?.takeIf { it.type == "text" }
+            ?: state.value.draft.blocks.lastOrNull { it.type == "text" }
+        if (block == null) { insertText(""); return }
+        val offset = if (savedState.get<String>("caretBlock") == block.id)
+            savedState.get<Int>("caretEnd") ?: block.text.length else block.text.length
+        mutableState.value = mutableState.value.copy(focusBlockId = block.id, focusOffset = offset.coerceIn(0, block.text.length))
+    }
+
     internal fun insertEmoji(value: String) {
         insertText(value)
         viewModelScope.launch(Dispatchers.IO) {
             recentEmojiRepo.saveEmoji(value)
             recentEmojiRepo.updateEmoji(value)
         }
+    }
+
+    internal fun backspace() {
+        val block = currentBlock()?.takeIf { it.type == "text" } ?: return
+        val same = savedState.get<String>("caretBlock") == block.id
+        val start = if (same) savedState.get<Int>("caretStart") ?: block.text.length else block.text.length
+        val end = if (same) savedState.get<Int>("caretEnd") ?: start else start
+        val result = deleteArticleBackward(block.text, start, end, EmojiUtils.emojiMap.keys)
+        if (result.text == block.text) return
+        updateBlock(block.id) { it.copy(text = result.text) }
+        setCaret(block.id, result.caret, result.caret)
+        mutableState.value = mutableState.value.copy(focusBlockId = block.id, focusOffset = result.caret)
     }
 
     internal fun importImages(uris: List<Uri>, cover: Boolean = false) {

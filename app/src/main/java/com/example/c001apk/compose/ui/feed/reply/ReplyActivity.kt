@@ -36,7 +36,6 @@ import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
-import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
@@ -53,15 +52,11 @@ import androidx.viewpager2.widget.ViewPager2
 import coil.load
 import com.example.c001apk.compose.BuildConfig
 import com.example.c001apk.compose.R
-import com.example.c001apk.compose.ThemeType
 import com.example.c001apk.compose.databinding.ActivityReplyBinding
 import com.example.c001apk.compose.databinding.ItemCaptchaBinding
-import com.example.c001apk.compose.constant.Constants.seedColors
 import com.example.c001apk.compose.logic.model.OSSUploadPrepareModel
 import com.example.c001apk.compose.ui.feed.reply.emoji.EmojiPagerAdapter
 import com.example.c001apk.compose.util.CookieUtil.materialYou
-import com.example.c001apk.compose.util.CookieUtil.seedColor
-import com.example.c001apk.compose.util.CookieUtil.themeType
 import com.example.c001apk.compose.util.EmojiTextWatcher
 import com.example.c001apk.compose.util.EmojiUtils
 import com.example.c001apk.compose.util.EmojiUtils.coolBList
@@ -278,52 +273,13 @@ class ReplyActivity : AppCompatActivity(),
 
     }
 
-    private fun resolvePrimaryColor(): Int {
-        if (materialYou) {
-            return MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorPrimary,
-                0
-            )
-        }
-        val seed = seedColors.getOrNull(ThemeType.entries.indexOf(themeType))
-            ?: "FF$seedColor".toLongOrNull(16)
-            ?: seedColors[0]
-        return seed.toInt()
-    }
+    private fun resolvePrimaryColor(): Int = com.example.c001apk.compose.ui.component.EditorAppearance.primary(this)
 
-    private fun resolveSurfaceContainerColor(): Int {
-        if (materialYou) {
-            return SurfaceColors.SURFACE_1.getColor(this)
-        }
-        val base = ContextCompat.getColor(this, R.color.color_surface)
-        val primary = resolvePrimaryColor()
-        return ColorUtils.blendARGB(base, primary, 0.08f)
-    }
+    private fun resolveSurfaceContainerColor(): Int = com.example.c001apk.compose.ui.component.EditorAppearance.panel(this)
 
-    private fun resolveSurfaceColor(): Int {
-        return if (materialYou) {
-            MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorSurface,
-                0
-            )
-        } else {
-            ContextCompat.getColor(this, R.color.color_surface)
-        }
-    }
+    private fun resolveSurfaceColor(): Int = com.example.c001apk.compose.ui.component.EditorAppearance.surface(this)
 
-    private fun resolvePrimaryDarkColor(primary: Int): Int {
-        return if (materialYou) {
-            MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorPrimaryDark,
-                primary
-            )
-        } else {
-            ColorUtils.blendARGB(primary, Color.BLACK, 0.2f)
-        }
-    }
+    private fun resolvePrimaryDarkColor(primary: Int): Int = com.example.c001apk.compose.ui.component.EditorAppearance.primaryDark(this, primary)
 
     private fun initAtUser() {
         atTopicResultLauncher =
@@ -469,7 +425,8 @@ class ReplyActivity : AppCompatActivity(),
         binding.out.setOnTouchListener(this)
         (binding.main as? SmoothInputLayout)?.setOnVisibilityChangeListener(this)
         (binding.main as? SmoothInputLayout)?.setOnKeyboardChangeListener(null)
-        val radius = listOf(16.dp.toFloat(), 16.dp.toFloat(), 0f, 0f)
+        val panelRadius = com.example.c001apk.compose.ui.component.EditorAppearance.PANEL_CORNER_DP.dp.toFloat()
+        val radius = listOf(panelRadius, panelRadius, 0f, 0f)
         val radiusBg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             setColor(this@ReplyActivity.color)
