@@ -15,6 +15,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Easing
@@ -154,6 +159,9 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
             // the user's explicit request to open the emoji panel.
             if (showEmoji && !switchingToEmoji) { showEmoji = false; returningToKeyboard = true }
             if (!returningToKeyboard && !switchingToEmoji) observedKeyboardHeight = coveredImeHeight
+            // Follow each opening IME frame; waiting for its final height causes
+            // a separate content animation after the keyboard is already open.
+            if (!switchingToEmoji) ((context as? Activity)?.currentFocus as? ArticleParagraphEditText)?.requestCaretReveal()
         }
         previousImeHeight = coveredImeHeight
         if (returningToKeyboard && coveredImeHeight >= emojiHeight && coveredImeHeight > 0) returningToKeyboard = false
@@ -163,7 +171,6 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
         if (switchingToEmoji && coveredImeHeight == 0) switchingToEmoji = false
         else if (coveredImeHeight > 0 && !switchingToEmoji) {
             observedKeyboardHeight = coveredImeHeight; returningToKeyboard = false
-            ((context as? Activity)?.currentFocus as? ArticleParagraphEditText)?.requestCaretReveal()
         }
         else if (returningToKeyboard) { delay(200); returningToKeyboard = false }
     }
@@ -406,8 +413,15 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+private object ArticleCaretBringIntoViewSpec : BringIntoViewSpec {
+    override val scrollAnimationSpec: AnimationSpec<Float> = snap()
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ArticlePanel(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalBringIntoViewSpec provides ArticleCaretBringIntoViewSpec) {
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
         .safeDrawingPadding().imePadding()) {
         Surface(modifier = Modifier.fillMaxSize(),
@@ -415,6 +429,7 @@ private fun ArticlePanel(content: @Composable () -> Unit) {
             color = MaterialTheme.colorScheme.surfaceContainer) {
             content()
         }
+    }
     }
 }
 

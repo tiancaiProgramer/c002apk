@@ -488,6 +488,86 @@ class ArticleEditorDeviceTest {
         }
     }
 
+    @Test fun keyboardAndCaretMoveTogether() {
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 30)
+        store.save(ArticleDraft(title = "键盘同步动画检查", blocks = listOf(ArticleBlock(id = "animation",
+            text = (0 until 120).joinToString("\n") { "第 $it 行：检查键盘与正文同步上移。" }))))
+        launchEditor().use { scenario ->
+            waitText("键盘同步动画检查")
+            scenario.onActivity { activity ->
+                activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+            }
+            SystemClock.sleep(350)
+            instrumentation.runOnMainSync {
+                nodes().firstNotNullOf { it.config.getOrNull(SemanticsActions.ScrollToIndex)?.action }.invoke(2)
+            }
+            SystemClock.sleep(400)
+            lateinit var host: ArticleActivity
+            lateinit var field: android.widget.EditText
+            var animatedIme = 0
+            var animationEnded = false
+            val samples = mutableListOf<Map<String, Any>>()
+            scenario.onActivity { activity ->
+                host = activity
+                fun find(view: View): android.widget.EditText? {
+                    if (view is android.widget.EditText && view.isShown) return view
+                    if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+                    return null
+                }
+                field = requireNotNull(find(activity.window.decorView)) { "Native paragraph must be laid out before animation measurement" }
+                val xy = IntArray(2); field.getLocationOnScreen(xy)
+                val bottom = activity.window.decorView.height - 88f * activity.resources.displayMetrics.density * CookieUtil.contentScale
+                val line = field.layout.getLineForVertical((bottom - xy[1] - field.lineHeight * 2).toInt().coerceAtLeast(0))
+                field.setSelection(field.layout.getLineStart(line)); field.requestFocus()
+            }
+            SystemClock.sleep(350)
+            val done = java.util.concurrent.CountDownLatch(1)
+            instrumentation.runOnMainSync {
+                host.window.decorView.setWindowInsetsAnimationCallback(object : android.view.WindowInsetsAnimation.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                    override fun onProgress(insets: android.view.WindowInsets, runningAnimations: MutableList<android.view.WindowInsetsAnimation>): android.view.WindowInsets {
+                        animatedIme = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom
+                        return insets
+                    }
+                    override fun onEnd(animation: android.view.WindowInsetsAnimation) {
+                        if (animation.typeMask and android.view.WindowInsets.Type.ime() != 0) animationEnded = true
+                    }
+                })
+                assertTrue("Keep the test activity in the foreground during animation capture", host.hasWindowFocus())
+                val start = SystemClock.uptimeMillis()
+                val frame = object : android.view.Choreographer.FrameCallback {
+                    override fun doFrame(frameTimeNanos: Long) {
+                        val xy = IntArray(2); field.getLocationOnScreen(xy)
+                        val line = field.layout.getLineForOffset(field.selectionEnd)
+                        val caret = xy[1] + field.totalPaddingTop + field.layout.getLineBottom(line) - field.scrollY
+                        val viewport = host.window.decorView.height - animatedIme - 88f * host.resources.displayMetrics.density * CookieUtil.contentScale
+                        val elapsed = SystemClock.uptimeMillis() - start
+                        samples.add(mapOf("elapsed_ms" to elapsed, "ime_bottom_px" to animatedIme,
+                            "window_width_px" to host.window.decorView.width, "window_height_px" to host.window.decorView.height,
+                            "window_focused" to host.hasWindowFocus(),
+                            "ime_visible" to (host.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true),
+                            "animation_ended" to animationEnded, "caret_bottom_px" to caret, "expected_viewport_bottom_px" to viewport))
+                        if (elapsed < 1100) android.view.Choreographer.getInstance().postFrameCallback(this) else done.countDown()
+                    }
+                }
+                android.view.Choreographer.getInstance().postFrameCallback(frame)
+                host.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(field, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+            assertTrue(done.await(4, java.util.concurrent.TimeUnit.SECONDS))
+            instrumentation.runOnMainSync { host.window.decorView.setWindowInsetsAnimationCallback(null) }
+            File(context.filesDir, "article-ime-animation.json").writeText(Gson().toJson(samples))
+            val first = samples.first()
+            val imeStart = samples.first { (it.getValue("ime_bottom_px") as Int) > 2 }.getValue("elapsed_ms") as Long
+            val caretStart = samples.first { (it.getValue("caret_bottom_px") as Int) < (first.getValue("caret_bottom_px") as Int) - 2 }.getValue("elapsed_ms") as Long
+            assertTrue("Caret moved only after the IME animation: lag=${caretStart - imeStart}ms", caretStart - imeStart <= 80)
+            val settled = samples.filter { it.getValue("animation_ended") == true }
+            assertTrue("IME animation callback was not observed", settled.isNotEmpty())
+            val endCaret = settled.first().getValue("caret_bottom_px") as Int
+            assertTrue("Caret continued a second animation after IME settled", settled.all { kotlin.math.abs((it.getValue("caret_bottom_px") as Int) - endCaret) <= 6 })
+        }
+    }
+
     @Test fun typingKeepsCaretAboveKeyboard() {
         store.save(ArticleDraft(title = "输入光标跟随测试", blocks = listOf(ArticleBlock(id = "typing",
             text = (0 until 120).joinToString("\n") { "原有第 $it 行：用于检查长文输入位置跟随。" }))))
@@ -560,7 +640,8 @@ class ArticleEditorDeviceTest {
     private fun launchEditor(): EditorHost {
         val monitor = instrumentation.addMonitor(ArticleActivity::class.java.name, null, false)
         // Some vendor ROMs silently block instrumentation's app-origin activity launch.
-        // Debug alone grants shell access with DUMP permission; release remains unexported.
+        // Only dedicated Debug/performance test builds grant shell access with DUMP;
+        // the normal release activity remains unexported.
         val command = "am start --display 0 -n ${context.packageName}/${ArticleActivity::class.java.name}"
         instrumentation.uiAutomation.executeShellCommand(command).use { descriptor ->
             java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
