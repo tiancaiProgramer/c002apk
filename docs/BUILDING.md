@@ -17,7 +17,7 @@ bash scripts/build-release.sh
 脚本默认构建开启 R8 和资源精简的签名 Release。不要在发布构建中传入 `-PdisableR8=true`；Debug 和无 R8 包仅供诊断，体积会显著增大。手动构建等价命令：
 
 ```sh
-bash gradlew :app:assembleRelease -PreleaseVersionName=0.1.4 -PreleaseVersionCode=261
+bash gradlew :app:assembleRelease -PreleaseVersionName=0.1.5 -PreleaseVersionCode=270
 ```
 
 Windows PowerShell 可执行：
