@@ -34,7 +34,8 @@
 
 ## 验证范围
 
-- 当前本地候选为 `0.1.5-article-preview.7` / versionCode 268；尚未推送 GitHub。46 项 JVM 测试通过。MIX Fold 3 外屏（1080×2520）最终优化测试包运行 9 项设备用例：8 项通过、1 项假设跳过、0 项失败。
+- 当前本地候选为 `0.1.5-article-preview.8` / versionCode 269；尚未推送 GitHub。46 项 JVM 测试通过。MIX Fold 3 外屏（1080×2520）最终优化测试包运行 10 项设备用例：9 项通过、1 项假设跳过、0 项失败。
+- `.8` 在键盘高度逐帧增加时直接调整光标可见区域，取消键盘结束后的第二段缓动；竖屏动画记录与限制见 [键盘同步检查](ARTICLE_IME_ANIMATION.md)。
 - 跳过项是测试 APK 内单独重建的加号菜单组件夹具，与 R8 后目标包的 Compose 桥接不兼容；该菜单定位与分隔线已在先前 Debug 检查通过，不把本次跳过计为通过。
 - 本次增加可见段落编辑、输入法打开后焦点保持、正文连续拖动及新增文字光标可见检查；同时复测光标选区插图、表情与键盘双向切换、动态样式采样、混排预览及草稿重建恢复。
 - 修复原生输入框在列表滚出可见区域时失去挂载/焦点的问题：固定当前焦点段落，并关闭 AndroidView 跨条目复用。输入或插入内容、键盘完成布局后，将光标所在行请求滚入可见区域；单纯浏览和拖动不触发强制追随。
@@ -48,7 +49,7 @@
 使用仓库既有的外部签名配置，不把 keystore 或密码写入源码：
 
 ```sh
-./gradlew :app:assembleRelease -PreleaseVersionName=0.1.5-article-preview.7 -PreleaseVersionCode=268
+./gradlew :app:assembleRelease -PreleaseVersionName=0.1.5-article-preview.8 -PreleaseVersionCode=269
 ```
 
 优化独立测试包（保留正常发布包和原版，不覆盖其包名）：
@@ -57,7 +58,7 @@
 ./gradlew :app:assembleRelease :app:assembleReleaseAndroidTest \
   -ParticlePerformanceTest=true \
   -PtestApplicationId=com.example.c001apk.replyfix.articletest \
-  -PreleaseVersionName=0.1.5-article-preview.7 -PreleaseVersionCode=268
+  -PreleaseVersionName=0.1.5-article-preview.8 -PreleaseVersionCode=269
 ```
 
 `articlePerformanceTest` 只允许上述专用包名，启用独立的测试 API 保留规则和 DUMP 保护入口；不能用来构建正常包名。普通发布不传这两个测试参数。测试包同样启用 R8 且不可调试，额外保留的测试契约会使其略大于普通包。
