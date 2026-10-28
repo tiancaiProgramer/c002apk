@@ -76,6 +76,8 @@ class ArticleEditorDeviceTest {
     }
 
     @Test fun plusMenuOffersExactlyTheTwoModesAndDispatchesTheSelectedOne() {
+        org.junit.Assume.assumeTrue("This isolated component fixture composes test-only call sites; use the real app menu for R8 smoke checks",
+            context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
         var feeds = 0
         var articles = 0
         launchEditor().use { scenario ->
@@ -237,8 +239,9 @@ class ArticleEditorDeviceTest {
                 editor.post { activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
                     .showSoftInput(editor, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
             }
-            fun imeVisible() = androidx.core.view.ViewCompat.getRootWindowInsets(editor)
-                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+            fun imeVisible() = if (android.os.Build.VERSION.SDK_INT >= 30)
+                editor.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true
+            else androidx.core.view.ViewCompat.getRootWindowInsets(editor)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
             waitUi("keyboard opens") { imeVisible() }
             screenshot("article-keyboard.png")
             click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("表情") == true }
@@ -264,6 +267,270 @@ class ArticleEditorDeviceTest {
         }
     }
 
+    @Test fun captureScrollPerformanceWithGeneratedDrafts() {
+        val fixture = File(context.cacheDir, "scroll-image.png")
+        Bitmap.createBitmap(960, 420, Bitmap.Config.ARGB_8888).apply {
+            Canvas(this).drawColor(Color.rgb(61, 133, 110))
+            fixture.outputStream().use { compress(Bitmap.CompressFormat.PNG, 100, it) }; recycle()
+        }
+        val image = store.importImage(Uri.fromFile(fixture)); fixture.delete()
+        val line = "这是用于测量图文编辑区滑动的生成文字，包含换行、@测试用户 和 #测试话题#。[哈哈哈]"
+        val keyboardCase = InstrumentationRegistry.getArguments().getString("article_scroll_keyboard") == "true"
+        val allCases = listOf(
+            "paragraphs" to (0 until 32).map { ArticleBlock(id = "paragraph-$it", text = "第 $it 段\n" + line.repeat(3)) },
+            "mixed" to (0 until 24).flatMap { index -> listOf(ArticleBlock(id = "text-$index", text = "第 $index 段\n" + line.repeat(3)),
+                ArticleBlock(id = "image-$index", type = "image", image = image)) },
+            "long_paragraph" to listOf(ArticleBlock(id = "long", text = (0 until 180).joinToString("\n") { "$it $line" })),
+        )
+        val cases = if (keyboardCase) allCases.filter { it.first == "long_paragraph" } else allCases
+        val results = linkedMapOf<String, Any>()
+        for ((name, blocks) in cases) {
+            store.save(ArticleDraft(title = "滚动性能测试 $name", blocks = blocks))
+            launchEditor().use { scenario ->
+                waitText("滚动性能测试 $name"); SystemClock.sleep(500)
+                if (keyboardCase) {
+                    var keyboardField: android.widget.EditText? = null
+                    scenario.onActivity { activity ->
+                        fun find(view: View): android.widget.EditText? {
+                            if (view is android.widget.EditText && view.isShown) return view
+                            if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+                            return null
+                        }
+                        val field = requireNotNull(find(activity.window.decorView)); keyboardField = field
+                        field.requestFocus(); field.setSelection(field.length() / 2)
+                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                            .showSoftInput(field, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                    }
+                    waitUi("keyboard visible for focused scroll") {
+                        keyboardField?.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true
+                    }
+                    SystemClock.sleep(300)
+                }
+                val samples = java.util.Collections.synchronizedList(mutableListOf<Map<String, Long>>())
+                val thread = android.os.HandlerThread("article-frame-metrics").apply { start() }
+                var droppedCallbacks = 0
+                val listener = android.view.Window.OnFrameMetricsAvailableListener { _, frame, dropped ->
+                    droppedCallbacks += dropped
+                    if (frame.getMetric(android.view.FrameMetrics.FIRST_DRAW_FRAME) == 0L) samples.add(mapOf(
+                        "total_ns" to frame.getMetric(android.view.FrameMetrics.TOTAL_DURATION),
+                        "layout_ns" to frame.getMetric(android.view.FrameMetrics.LAYOUT_MEASURE_DURATION),
+                        "draw_ns" to frame.getMetric(android.view.FrameMetrics.DRAW_DURATION),
+                        "gpu_ns" to frame.getMetric(android.view.FrameMetrics.GPU_DURATION),
+                        "unknown_ns" to frame.getMetric(android.view.FrameMetrics.UNKNOWN_DELAY_DURATION),
+                        "animation_ns" to frame.getMetric(android.view.FrameMetrics.ANIMATION_DURATION),
+                        "sync_ns" to frame.getMetric(android.view.FrameMetrics.SYNC_DURATION),
+                        "deadline_ns" to frame.getMetric(android.view.FrameMetrics.DEADLINE),
+                    ))
+                }
+                var window: android.view.Window? = null
+                var width = 0; var height = 0; var refreshRate = 0f; var displayId = 0
+                var focused: (() -> Boolean) = { false }
+                scenario.onActivity { activity ->
+                    window = activity.window; width = activity.window.decorView.width; height = activity.window.decorView.height
+                    if (keyboardCase) height -= activity.window.decorView.rootWindowInsets
+                        ?.getInsets(android.view.WindowInsets.Type.ime())?.bottom ?: 0
+                    refreshRate = activity.display?.refreshRate ?: 0f
+                    displayId = activity.display?.displayId ?: 0
+                    focused = { activity.hasWindowFocus() }
+                    activity.window.addOnFrameMetricsAvailableListener(listener, android.os.Handler(thread.looper))
+                }
+                assertEquals("Use the physical display for both windows and touches", 0, displayId)
+                waitUi("physical editor window focused", focused)
+                fun scrollValue(): Float {
+                    var value = 0f
+                    instrumentation.runOnMainSync {
+                        value = nodes().firstNotNullOfOrNull { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) }?.value?.invoke() ?: 0f
+                    }
+                    return value
+                }
+                val positions = mutableListOf(scrollValue())
+                try {
+                    repeat(8) { swipe ->
+                        val down = SystemClock.uptimeMillis()
+                        val from = height * if (swipe < 4) .74f else .32f
+                        val to = height * if (swipe < 4) .32f else .74f
+                        fun send(action: Int, y: Float) {
+                            val event = requireNotNull(if (android.os.Build.VERSION.SDK_INT >= 34) android.view.MotionEvent.obtain(
+                                down, SystemClock.uptimeMillis(), action, 1,
+                                arrayOf(android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }),
+                                arrayOf(android.view.MotionEvent.PointerCoords().apply { x = width * .52f; this.y = y; pressure = 1f; size = 1f }),
+                                0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, displayId, 0, android.view.MotionEvent.CLASSIFICATION_NONE)
+                            else android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, width * .52f, y, 0))
+                            event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                            // Replay through this window only. Global injection can be
+                            // interrupted by another virtual display's input stream.
+                            try {
+                                var handled = false
+                                instrumentation.runOnMainSync { handled = requireNotNull(window).decorView.dispatchTouchEvent(event) }
+                                if (action == android.view.MotionEvent.ACTION_DOWN) assertTrue("Editor did not handle touch down", handled)
+                            } finally { event.recycle() }
+                        }
+                        send(android.view.MotionEvent.ACTION_DOWN, from)
+                        for (step in 1..20) { SystemClock.sleep(16); send(android.view.MotionEvent.ACTION_MOVE, from + (to - from) * step / 20) }
+                        send(android.view.MotionEvent.ACTION_UP, to)
+                        SystemClock.sleep(250)
+                        positions.add(scrollValue())
+                    }
+                } finally {
+                    instrumentation.runOnMainSync { window?.removeOnFrameMetricsAvailableListener(listener) }
+                    thread.quitSafely(); thread.join(1000)
+                }
+                val snapshot = synchronized(samples) { samples.toList() }
+                fun percentile(field: String, fraction: Double): Double {
+                    val values = snapshot.map { it.getValue(field) }.sorted()
+                    return values.getOrElse(((values.size - 1) * fraction).toInt().coerceAtLeast(0)) { 0L } / 1_000_000.0
+                }
+                results[name] = mapOf("frames" to snapshot.size, "keyboard_visible" to keyboardCase, "display_id" to displayId, "input_replay" to "window_dispatch", "refresh_hz" to refreshRate, "dropped_metric_callbacks" to droppedCallbacks,
+                    "over_deadline" to snapshot.count { it.getValue("deadline_ns") > 0 && it.getValue("total_ns") > it.getValue("deadline_ns") },
+                    "total_p50_ms" to percentile("total_ns", .5), "total_p95_ms" to percentile("total_ns", .95),
+                    "layout_p95_ms" to percentile("layout_ns", .95), "draw_p95_ms" to percentile("draw_ns", .95),
+                    "gpu_p95_ms" to percentile("gpu_ns", .95), "unknown_p95_ms" to percentile("unknown_ns", .95),
+                    "scroll_positions" to positions, "raw_frames" to snapshot)
+                File(context.filesDir, "article-scroll-performance.json").writeText(Gson().toJson(results))
+                assertTrue("No frame metrics collected for $name", snapshot.size > 20)
+                assertEquals("Scrolling must not change draft text or image order", blocks, store.read().blocks)
+            }
+        }
+    }
+
+    @Test fun editingAfterScrollingOnlyChangesTheVisibleParagraph() {
+        val blocks = (0 until 40).map { ArticleBlock(id = "edit-$it",
+            text = "段落 $it：" + "滚动后仍应编辑当前段落。[哈哈哈]".repeat(8)) }
+        store.save(ArticleDraft(title = "滚动后编辑回归", blocks = blocks))
+        launchEditor().use {
+            waitText("滚动后编辑回归")
+            repeat(5) { step ->
+                instrumentation.runOnMainSync {
+                    val action = nodes().firstNotNullOf { it.config.getOrNull(SemanticsActions.ScrollBy)?.action }
+                    assertTrue(action.invoke(0f, if (step < 4) 1500f else -800f))
+                }
+                SystemClock.sleep(250)
+            }
+            var editedId = ""
+            instrumentation.runOnMainSync {
+                fun find(view: View): android.widget.EditText? {
+                    if (view is android.widget.EditText && view.isShown && view.getGlobalVisibleRect(android.graphics.Rect()) &&
+                        blocks.any { it.text == view.text.toString() }) return view
+                    if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+                    return null
+                }
+                val field = requireNotNull(roots.firstNotNullOfOrNull { find(it.view) })
+                editedId = blocks.first { it.text == field.text.toString() }.id
+                field.setSelection(field.length())
+                field.append(" 滑动后修改")
+            }
+            waitUi("edited paragraph saved") { store.read().blocks.first { it.id == editedId }.text.endsWith(" 滑动后修改") }
+            assertEquals(blocks.map { if (it.id == editedId) it.copy(text = it.text + " 滑动后修改") else it }, store.read().blocks)
+        }
+    }
+
+    @Test fun keyboardStaysOpenWhenFocusedParagraphMovesForIme() {
+        val blocks = (0 until 32).map { ArticleBlock(id = "ime-$it", text = "输入法段落 $it：" + "保持当前编辑焦点，不因键盘缩放自动关闭。".repeat(8)) }
+        store.save(ArticleDraft(title = "输入法焦点稳定测试", blocks = blocks))
+        launchEditor().use { scenario ->
+            waitText("输入法焦点稳定测试"); SystemClock.sleep(400)
+            repeat(3) {
+                instrumentation.runOnMainSync { nodes().firstNotNullOf { it.config.getOrNull(SemanticsActions.ScrollBy)?.action }.invoke(0f, 1300f) }
+                SystemClock.sleep(200)
+            }
+            lateinit var activity: ArticleActivity
+            lateinit var field: android.widget.EditText
+            scenario.onActivity { host ->
+                activity = host
+                val fields = mutableListOf<android.widget.EditText>()
+                fun visit(view: View) {
+                    val rect = android.graphics.Rect()
+                    if (view is android.widget.EditText && view.isShown && view.getGlobalVisibleRect(rect) && rect.height() > 60) fields.add(view)
+                    if (view is ViewGroup) for (i in 0 until view.childCount) visit(view.getChildAt(i))
+                }
+                visit(host.window.decorView)
+                field = fields.maxBy { val rect = android.graphics.Rect(); it.getGlobalVisibleRect(rect); rect.centerY() }
+                field.requestFocus(); field.setSelection(field.length() / 2)
+                field.post { host.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(field, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+            }
+            val samples = mutableListOf<Map<String, Any>>()
+            fun pinState(): Boolean = field.javaClass.getDeclaredField("focusPin").apply { isAccessible = true }.get(field) != null
+            repeat(70) { tick ->
+                instrumentation.runOnMainSync {
+                    samples.add(mapOf("tick" to tick, "ime" to (activity.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true),
+                        "focused" to field.isFocused, "attached" to field.isAttachedToWindow, "pinned" to pinState(),
+                        "current_focus" to (activity.currentFocus?.javaClass?.simpleName ?: "none")))
+                }
+                SystemClock.sleep(35)
+            }
+            File(context.filesDir, "article-ime-focus-retention.json").writeText(Gson().toJson(samples))
+            assertTrue("Keyboard never opened", samples.any { it["ime"] == true })
+            assertTrue("Keyboard or editor focus disappeared during IME resize", samples.takeLast(15).all { it["ime"] == true && it["focused"] == true && it["attached"] == true })
+            val dragSamples = mutableListOf<Map<String, Any>>()
+            repeat(3) { swipe ->
+                var height = 0; var width = 0
+                instrumentation.runOnMainSync {
+                    val decor = activity.window.decorView
+                    height = decor.height - (decor.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.ime())?.bottom ?: 0)
+                    width = decor.width
+                }
+                val down = SystemClock.uptimeMillis()
+                fun send(action: Int, fraction: Float) {
+                    val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, width * .52f, height * fraction, 0)
+                    event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                    try { instrumentation.runOnMainSync { activity.window.decorView.dispatchTouchEvent(event) } } finally { event.recycle() }
+                }
+                send(android.view.MotionEvent.ACTION_DOWN, .30f)
+                for (step in 1..20) { SystemClock.sleep(16); send(android.view.MotionEvent.ACTION_MOVE, .30f + .45f * step / 20) }
+                send(android.view.MotionEvent.ACTION_UP, .75f); SystemClock.sleep(250)
+                instrumentation.runOnMainSync { dragSamples.add(mapOf("swipe" to swipe,
+                    "ime" to (activity.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true),
+                    "focused" to field.isFocused, "attached" to field.isAttachedToWindow, "pinned" to pinState())) }
+            }
+            File(context.filesDir, "article-ime-drag-retention.json").writeText(Gson().toJson(dragSamples))
+            assertTrue("Dragging content dismissed keyboard or recycled the active editor", dragSamples.all { it["ime"] == true && it["focused"] == true && it["attached"] == true })
+        }
+    }
+
+    @Test fun typingKeepsCaretAboveKeyboard() {
+        store.save(ArticleDraft(title = "输入光标跟随测试", blocks = listOf(ArticleBlock(id = "typing",
+            text = (0 until 120).joinToString("\n") { "原有第 $it 行：用于检查长文输入位置跟随。" }))))
+        launchEditor().use { scenario ->
+            waitText("输入光标跟随测试")
+            lateinit var activity: ArticleActivity
+            lateinit var field: android.widget.EditText
+            scenario.onActivity { host ->
+                activity = host
+                fun find(view: View): android.widget.EditText? {
+                    if (view is android.widget.EditText && view.isShown) return view
+                    if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+                    return null
+                }
+                field = requireNotNull(find(host.window.decorView))
+                field.requestFocus(); field.setSelection(field.length())
+                field.post { host.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(field, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+            }
+            waitUi("keyboard opens for typing") { activity.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true }
+            val added = (0 until 15).joinToString("\n", prefix = "\n") { "新增第 $it 行：光标应始终位于键盘上方。" }
+            instrumentation.runOnMainSync {
+                val connection = requireNotNull(field.onCreateInputConnection(android.view.inputmethod.EditorInfo()))
+                assertTrue(connection.commitText(added, 1))
+            }
+            SystemClock.sleep(900)
+            var details = emptyMap<String, Any>()
+            instrumentation.runOnMainSync {
+                val xy = IntArray(2); field.getLocationOnScreen(xy)
+                val line = field.layout.getLineForOffset(field.selectionEnd)
+                val caretBottom = xy[1] + field.totalPaddingTop + field.layout.getLineBottom(line) - field.scrollY
+                val ime = activity.window.decorView.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.ime())?.bottom ?: 0
+                val toolbar = 88f * activity.resources.displayMetrics.density * CookieUtil.contentScale
+                val viewportBottom = activity.window.decorView.height - ime - toolbar
+                details = mapOf("caret_bottom_px" to caretBottom, "viewport_bottom_px" to viewportBottom,
+                    "focused" to field.isFocused, "attached" to field.isAttachedToWindow, "ime_bottom_px" to ime)
+            }
+            File(context.filesDir, "article-caret-visibility.json").writeText(Gson().toJson(details))
+            assertTrue("Draft text was not preserved", store.read().blocks.single().text.endsWith(added))
+            assertTrue("Latest typed line is behind keyboard or editor toolbar", (details.getValue("caret_bottom_px") as Int) <= (details.getValue("viewport_bottom_px") as Float) + 2)
+        }
+    }
+
     private fun waitUi(description: String, predicate: () -> Boolean) {
         val deadline = SystemClock.elapsedRealtime() + 8000
         while (SystemClock.elapsedRealtime() < deadline) {
@@ -280,7 +547,8 @@ class ArticleEditorDeviceTest {
                 details.add(mapOf("class" to view.javaClass.name, "width" to view.width, "height" to view.height,
                     "shown" to view.isShown, "global_visible" to view.getGlobalVisibleRect(rect), "bounds" to rect.toShortString(),
                     "click" to view.hasOnClickListeners(), "children" to (view as? ViewGroup)?.childCount,
-                    "ime_visible" to androidx.core.view.ViewCompat.getRootWindowInsets(view)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())))
+                    "ime_visible" to (if (android.os.Build.VERSION.SDK_INT >= 30) view.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime())
+                        else androidx.core.view.ViewCompat.getRootWindowInsets(view)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()))))
                 if (view is ViewGroup) for (i in 0 until view.childCount) record(view.getChildAt(i))
             }
             roots.forEach { record(it.view) }
@@ -293,7 +561,7 @@ class ArticleEditorDeviceTest {
         val monitor = instrumentation.addMonitor(ArticleActivity::class.java.name, null, false)
         // Some vendor ROMs silently block instrumentation's app-origin activity launch.
         // Debug alone grants shell access with DUMP permission; release remains unexported.
-        val command = "am start -n ${context.packageName}/${ArticleActivity::class.java.name}"
+        val command = "am start --display 0 -n ${context.packageName}/${ArticleActivity::class.java.name}"
         instrumentation.uiAutomation.executeShellCommand(command).use { descriptor ->
             java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
         }

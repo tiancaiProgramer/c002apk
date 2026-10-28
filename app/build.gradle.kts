@@ -19,10 +19,20 @@ val gitCommitHash = if (rootProject.file(".git").exists()) providers.exec {
     commandLine("git", "rev-parse", "--verify", "--short", "HEAD")
 }.standardOutput.asText.map { it.trim() }.get() else "source-archive"
 
+// A local, signed release target for editor instrumentation. Never enable its
+// shell-only launch entry on the normal application ID.
+val articlePerformanceTest = providers.gradleProperty("articlePerformanceTest").orNull == "true"
+if (articlePerformanceTest) check(providers.gradleProperty("testApplicationId").orNull ==
+    "com.example.c001apk.replyfix.articletest")
+
 android {
     namespace = "com.example.c001apk.compose"
     compileSdk = 35
     buildToolsVersion = "36.0.0"
+    if (articlePerformanceTest) {
+        testBuildType = "release"
+        sourceSets.getByName("release").manifest.srcFile("src/debug/AndroidManifest.xml")
+    }
 
     defaultConfig {
         applicationId = providers.gradleProperty("testApplicationId")
@@ -75,6 +85,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (articlePerformanceTest) proguardFile("article-performance-rules.pro")
         }
     }
 
@@ -143,6 +154,7 @@ protobuf {
 }
 
 dependencies {
+    if (articlePerformanceTest) implementation("androidx.tracing:tracing:1.1.0")
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

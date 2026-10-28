@@ -161,7 +161,10 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     LaunchedEffect(coveredImeHeight, returningToKeyboard, switchingToEmoji) {
         delay(200)
         if (switchingToEmoji && coveredImeHeight == 0) switchingToEmoji = false
-        else if (coveredImeHeight > 0 && !switchingToEmoji) { observedKeyboardHeight = coveredImeHeight; returningToKeyboard = false }
+        else if (coveredImeHeight > 0 && !switchingToEmoji) {
+            observedKeyboardHeight = coveredImeHeight; returningToKeyboard = false
+            ((context as? Activity)?.currentFocus as? ArticleParagraphEditText)?.requestCaretReveal()
+        }
         else if (returningToKeyboard) { delay(200); returningToKeyboard = false }
     }
     fun hideKeyboard() {
@@ -350,7 +353,7 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
                                 } })
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         }
-                        itemsIndexed(draft.blocks, key = { _, block -> block.id }) { _, block ->
+                        itemsIndexed(draft.blocks, key = { _, block -> block.id }, contentType = { _, block -> block.type }) { _, block ->
                             ArticleBlockEditor(block, enabled, state.focusBlockId == block.id, state.focusOffset,
                                 keyboardOnFocus = !showEmoji && !returningToKeyboard,
                                 onChange = { next -> viewModel.updateBlock(block.id) { next } },
