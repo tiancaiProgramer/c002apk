@@ -52,10 +52,11 @@ fun LazyListScope.ArticleItem(
             )
         }
     }
-    if (!response.title.isNullOrEmpty()) {
+    val articleTitle = response.messageTitle?.takeIf { it.isNotBlank() } ?: response.title
+    if (!articleTitle.isNullOrEmpty()) {
         item(key = "title") {
             Text(
-                text = response.title,
+                text = articleTitle,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)

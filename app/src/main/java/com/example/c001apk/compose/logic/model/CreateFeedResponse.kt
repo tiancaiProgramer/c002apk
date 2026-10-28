@@ -20,5 +20,6 @@ data class CreateFeedResponse(
         @SerializedName("device_title") val deviceTitle: String?,
         @SerializedName("message_signature") val messageSignature: String?,
         val picArr: List<String>?,
+        @SerializedName("is_html_article") val isHtmlArticle: Int? = null,
     )
 }

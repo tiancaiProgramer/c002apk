@@ -7,11 +7,13 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.example.c001apk.compose.logic.repository.NetworkRepo
 import com.example.c001apk.compose.logic.repository.RecentEmojiRepo
+import com.example.c001apk.compose.logic.state.LoadingState
 import com.example.c001apk.compose.util.CookieUtil
 import com.example.c001apk.compose.util.EmojiUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -28,6 +30,7 @@ internal data class ArticleEditorState(
     val error: String? = null,
     val captcha: ByteArray? = null,
     val createdId: String? = null,
+    val publicationWarning: String? = null,
     val focusBlockId: String? = null,
     val focusOffset: Int = 0,
 )
@@ -232,15 +235,37 @@ class ArticleViewModel @Inject constructor(
         val response = network.postCreateFeed(requireNotNull(pendingForm)).first().getOrThrow()
         val id = response.data?.id?.takeIf { it.isNotBlank() && it != "0" }
         if (id != null) {
-            store.clear()
+            // An ID also comes back when the server flattens a short article into a feed.
+            // A failed read-back must never enable a second POST or delete the local original.
+            val warning = if (response.data?.isHtmlArticle == 0) ArticlePublicationCheck.CONVERTED
+            else try {
+                mutableState.value = mutableState.value.copy(progress = "正在核验图文排版…")
+                verifyPublication(id)
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { ArticlePublicationCheck.UNVERIFIED }
+            if (warning == null) store.clear()
             uploaded = emptyMap()
             pendingForm = null
-            mutableState.value = mutableState.value.copy(createdId = id, captcha = null)
+            mutableState.value = mutableState.value.copy(createdId = id, publicationWarning = warning, captcha = null)
         } else if (response.messageStatus == "err_request_captcha") {
             loadCaptcha()
         } else {
             fail(response.message ?: response.messageStatus ?: "服务端未返回新图文 ID，未确认发布成功；草稿已保留")
         }
+    }
+
+    private suspend fun verifyPublication(id: String): String? {
+        var warning = "暂时无法读回已发布内容。\n\n" + ArticlePublicationCheck.UNVERIFIED
+        repeat(4) { attempt ->
+            if (attempt > 0) delay(1000)
+            val detail = network.getFeedContent("/v6/feed/detail?id=$id").first { it !is LoadingState.Loading }
+            if (detail is LoadingState.Success) {
+                val problem = ArticlePublicationCheck.problem(mutableState.value.draft, detail.response.messageRawOutput, uploaded)
+                if (problem == null) return null
+                warning = "$problem\n\n${ArticlePublicationCheck.UNVERIFIED}"
+            }
+        }
+        return warning
     }
 
     private suspend fun loadCaptcha() {

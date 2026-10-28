@@ -62,17 +62,183 @@ class ArticleEditorDeviceTest {
         CookieUtil.uid = "offline-article-editor-test"
         CookieUtil.token = "offline-not-a-real-token"
         CookieUtil.isDarkMode = false
+        CookieUtil.fontScale = InstrumentationRegistry.getArguments().getString("article_font_scale")?.toFloat() ?: 1f
+        CookieUtil.contentScale = InstrumentationRegistry.getArguments().getString("article_content_scale")?.toFloat() ?: 1f
         store = ArticleDraftStore(context, CookieUtil.uid)
-        store.clear()
+        if (InstrumentationRegistry.getArguments().getString("article_process_phase") != "read") store.clear()
     }
 
     @After fun cleanup() {
         instrumentation.runOnMainSync { ViewRootForTest.onViewCreatedCallback = null; roots.clear() }
-        store.clear()
+        if (InstrumentationRegistry.getArguments().getString("article_process_phase") != "write") store.clear()
         CookieUtil.isLogin = false
         CookieUtil.uid = ""
         CookieUtil.token = ""
         CookieUtil.isDarkMode = false
+        CookieUtil.fontScale = 1f
+        CookieUtil.contentScale = 1f
+    }
+
+    @Test fun privateVisibilityAndPublishCancellationSurviveRecreation() {
+        store.save(ArticleDraft(title = "离线可见范围测试", blocks = listOf(ArticleBlock(text = "仅检查本地确认弹窗，不提交。"))))
+        launchEditor().use { scenario ->
+            waitText("离线可见范围测试")
+            clickText("仅自己可见")
+            assertTrue(store.read().onlySelf)
+            clickText("发布")
+            waitText("发布后仅自己可见，是否继续？")
+            clickText("取消")
+            scenario.recreate()
+            waitText("离线可见范围测试")
+            assertTrue(store.read().onlySelf)
+            clickText("发布")
+            waitText("发布后仅自己可见，是否继续？")
+            screenshot("audit-private-confirmation.png")
+            clickText("取消")
+            assertTrue(store.read().hasContent)
+        }
+    }
+
+    @Test fun paragraphMenuMovesAndDeletesOnlyTheSelectedBlock() {
+        val original = listOf(ArticleBlock(id = "a", text = "第一段测试文字"),
+            ArticleBlock(id = "b", text = "第二段测试文字"), ArticleBlock(id = "c", text = "第三段测试文字"))
+        store.save(ArticleDraft(title = "段落管理测试", blocks = original))
+        launchEditor().use { scenario ->
+            waitText("段落管理测试")
+            scenario.onActivity { ViewModelProvider(it)[ArticleViewModel::class.java].setCaret("b", 0, 0) }
+            click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("更多选项") == true }
+            clickText("上移当前段")
+            assertEquals(listOf("b", "a", "c"), store.read().blocks.map { it.id })
+            click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("更多选项") == true }
+            clickText("删除当前段")
+            assertEquals(listOf("a", "c"), store.read().blocks.map { it.id })
+            assertEquals(listOf(original[0], original[2]), store.read().blocks)
+            scenario.recreate()
+            waitText("段落管理测试")
+            assertEquals(listOf("a", "c"), store.read().blocks.map { it.id })
+        }
+    }
+
+    @Test fun invalidImageAndChangedAccountDoNotOverwriteDraft() {
+        val original = ArticleDraft(title = "失败保护测试", blocks = listOf(ArticleBlock(text = "必须完整保留的原草稿")))
+        store.save(original)
+        val invalid = File(context.cacheDir, "not-an-image.txt").apply { writeText("invalid image fixture") }
+        try {
+            launchEditor().use { scenario ->
+                waitText("失败保护测试")
+                lateinit var model: ArticleViewModel
+                scenario.onActivity { host ->
+                    model = ViewModelProvider(host)[ArticleViewModel::class.java]
+                    model.captureImageInsertion()
+                    model.importImages(listOf(Uri.fromFile(invalid)))
+                }
+                waitUi("invalid image rejected") { model.state.value.error != null && !model.state.value.busy }
+                assertEquals(original, store.read())
+                clickText("知道了")
+                instrumentation.runOnMainSync {
+                    CookieUtil.uid = "another-offline-account"
+                    model.edit { it.copy(title = "must not be saved") }
+                }
+                waitText("登录状态已变化，请退出编辑页后重新打开")
+                assertEquals(original, store.read())
+                CookieUtil.uid = "offline-article-editor-test"
+                clickText("知道了")
+            }
+        } finally { invalid.delete(); CookieUtil.uid = "offline-article-editor-test" }
+    }
+
+    @Test fun coverReplacementAndClearKeepOriginalFiles() {
+        val source = File(context.cacheDir, "cover-audit.png")
+        Bitmap.createBitmap(640, 240, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.rgb(40, 140, 180))
+            source.outputStream().use { compress(Bitmap.CompressFormat.PNG, 100, it) }
+            recycle()
+        }
+        store.save(ArticleDraft(title = "题图与清空测试", blocks = listOf(ArticleBlock(text = "此处为生成的测试正文。"))))
+        try {
+            launchEditor().use { scenario ->
+                waitText("题图与清空测试")
+                lateinit var model: ArticleViewModel
+                scenario.onActivity { host ->
+                    model = ViewModelProvider(host)[ArticleViewModel::class.java]
+                    model.importImages(listOf(Uri.fromFile(source)), cover = true)
+                }
+                waitUi("cover imported") { !model.state.value.busy && model.state.value.draft.cover.isNotEmpty() }
+                val first = store.read().cover
+                val firstFile = store.file(first)
+                assertTrue(firstFile.isFile)
+                scenario.onActivity { model.importImages(listOf(Uri.fromFile(source)), cover = true) }
+                waitUi("cover replaced") { !model.state.value.busy && model.state.value.draft.cover != first }
+                assertFalse("Unused local cover copy must be pruned", firstFile.exists())
+                assertTrue(source.isFile)
+                click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("更多选项") == true }
+                clickText("清空草稿")
+                waitText("清空草稿？")
+                clickText("取消")
+                assertTrue(store.read().hasContent)
+                click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("更多选项") == true }
+                clickText("清空草稿")
+                clickText("清空")
+                waitUi("draft cleared") { !model.state.value.draft.hasContent }
+                assertFalse(store.read().hasContent)
+                assertTrue("User source photo must not be deleted", source.isFile)
+            }
+        } finally { source.delete() }
+    }
+
+    @Test fun scaledWindowKeepsHeaderControlsAndPreviewWithinViewport() {
+        store.save(ArticleDraft(title = "缩放窗口测试", blocks = listOf(ArticleBlock(text = "大字体与内容缩放下的正文。"))))
+        launchEditor().use { scenario ->
+            waitText("缩放窗口测试")
+            var width = 0
+            scenario.onActivity { width = it.window.decorView.width }
+            val preview = accessibilityTextBounds("预览")
+            val publish = accessibilityTextBounds("发布")
+            assertTrue("Header controls overlap", preview[2] <= publish[0] + 1)
+            assertTrue("Publish control is clipped", publish[0] >= 0 && publish[2] <= width + 1)
+            clickText("预览")
+            waitText("大字体与内容缩放下的正文。")
+            screenshot("audit-scaled-preview.png")
+            clickText("编辑")
+            assertEquals("缩放窗口测试", store.read().title)
+        }
+    }
+
+    @Test fun draftSurvivesActualProcessRestart() {
+        val phase = InstrumentationRegistry.getArguments().getString("article_process_phase")
+        check(phase in setOf("write", "read")) { "Run as explicit two-phase process-restart check" }
+        if (phase == "write") {
+            val external = File(context.cacheDir, "restart-image.png")
+            Bitmap.createBitmap(160, 60, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(Color.rgb(50, 150, 100))
+                external.outputStream().use { compress(Bitmap.CompressFormat.PNG, 100, it) }
+                recycle()
+            }
+            val imported = store.importImage(Uri.fromFile(external))
+            external.delete()
+            store.save(ArticleDraft(title = "进程重启草稿", onlySelf = true, blocks = listOf(
+                ArticleBlock(id = "restart-text", text = "重启前后必须保持的正文。"),
+                ArticleBlock(id = "restart-image", type = "image", image = imported, description = "重启图片说明"))))
+            launchEditor().use {
+                waitText("进程重启草稿")
+                setText("进程重启草稿", "已保存的进程重启草稿")
+                assertEquals("已保存的进程重启草稿", store.read().title)
+            }
+        } else {
+            val restored = store.read()
+            assertEquals("已保存的进程重启草稿", restored.title)
+            assertTrue(restored.onlySelf)
+            assertEquals(listOf("restart-text", "restart-image"), restored.blocks.map { it.id })
+            assertEquals("重启前后必须保持的正文。", restored.blocks[0].text)
+            assertEquals("重启图片说明", restored.blocks[1].description)
+            assertTrue(store.file(restored.blocks[1].image).isFile)
+            launchEditor().use {
+                waitText("已保存的进程重启草稿")
+                clickText("预览")
+                revealText("重启前后必须保持的正文。")
+                screenshot("audit-process-restored.png")
+            }
+        }
     }
 
     @Test fun plusMenuOffersExactlyTheTwoModesAndDispatchesTheSelectedOne() {
@@ -125,7 +291,7 @@ class ArticleEditorDeviceTest {
             screenshot("article-editor.png")
             clickText("预览")
             waitText("第一段文字：图片会出现在这段文字之后。")
-            waitText("第二段文字：继续在图片之后阅读。")
+            revealText("第二段文字：继续在图片之后阅读。")
             screenshot("article-preview.png")
             clickText("编辑")
             setText("图文混排预览", "保存后的图文标题")
@@ -226,7 +392,7 @@ class ArticleEditorDeviceTest {
     @Test fun keyboardEmojiSwitchKeepsTextAndReturnsToKeyboard() {
         store.save(ArticleDraft(title = "键盘切换测试", blocks = listOf(ArticleBlock(id = "keyboard", text = "正文"))))
         launchEditor().use { scenario ->
-            waitText("正文")
+            revealText("正文")
             lateinit var editor: android.widget.EditText
             scenario.onActivity { activity ->
                 fun find(view: View): android.widget.EditText? {
@@ -573,6 +739,7 @@ class ArticleEditorDeviceTest {
             text = (0 until 120).joinToString("\n") { "原有第 $it 行：用于检查长文输入位置跟随。" }))))
         launchEditor().use { scenario ->
             waitText("输入光标跟随测试")
+            revealNativeParagraph()
             lateinit var activity: ArticleActivity
             lateinit var field: android.widget.EditText
             scenario.onActivity { host ->
@@ -646,8 +813,17 @@ class ArticleEditorDeviceTest {
         instrumentation.uiAutomation.executeShellCommand(command).use { descriptor ->
             java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
         }
-        val activity = monitor.waitForActivityWithTimeout(8000) as? ArticleActivity
+        var activity = monitor.waitForActivityWithTimeout(8000) as? ArticleActivity
             ?: error("Shell-launched editor did not start within 8 seconds")
+        val orientation = InstrumentationRegistry.getArguments().getString("article_orientation")
+        if (orientation != null) {
+            val requested = if (orientation == "landscape") android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            val current = activity
+            instrumentation.runOnMainSync { current.requestedOrientation = requested }
+            activity = monitor.waitForActivityWithTimeout(2500) as? ArticleActivity ?: current
+            SystemClock.sleep(500)
+        }
         return EditorHost(activity, monitor)
     }
 
@@ -718,12 +894,52 @@ class ArticleEditorDeviceTest {
     }
 
     private fun setText(old: String, value: String) {
-        waitText(old)
+        revealText(old, backwards = true)
         instrumentation.runOnMainSync {
             val node = nodes().first { matchesText(it, old) && it.config.getOrNull(SemanticsActions.SetText)?.action != null }
             assertTrue(requireNotNull(node.config.getOrNull(SemanticsActions.SetText)?.action).invoke(AnnotatedString(value)))
         }
         SystemClock.sleep(180)
+    }
+
+    private fun scrollEditor(backwards: Boolean = false) {
+        waitNode { it.config.getOrNull(SemanticsActions.ScrollBy)?.action != null }
+        instrumentation.runOnMainSync {
+            val scroll = nodes().firstOrNull { it.config.getOrNull(SemanticsActions.ScrollBy)?.action != null }
+                ?: error("No scrollable editor or preview")
+            val height = roots.first { it.view.isAttachedToWindow }.view.height.toFloat()
+            scroll.config.getOrNull(SemanticsActions.ScrollBy)!!.action!!.invoke(0f, height * if (backwards) -0.45f else 0.45f)
+        }
+        SystemClock.sleep(400)
+    }
+
+    private fun revealText(text: String, backwards: Boolean = false) {
+        repeat(8) {
+            var present = false
+            instrumentation.runOnMainSync {
+                fun find(view: View): Boolean = view.isShown && ((view is TextView && view.text.toString() == text) ||
+                    (view is ViewGroup && (0 until view.childCount).any { find(view.getChildAt(it)) }))
+                present = nodes().any { matchesText(it, text) } || roots.any { find(it.view) }
+            }
+            if (present) return
+            scrollEditor(backwards)
+        }
+        waitText(text)
+    }
+
+    private fun revealNativeParagraph() {
+        repeat(8) {
+            var present = false
+            instrumentation.runOnMainSync {
+                fun find(view: View): Boolean = view.isShown && ((view is android.widget.EditText &&
+                    view.getGlobalVisibleRect(android.graphics.Rect())) ||
+                    (view is ViewGroup && (0 until view.childCount).any { find(view.getChildAt(it)) }))
+                present = roots.any { find(it.view) }
+            }
+            if (present) return
+            scrollEditor()
+        }
+        error("No visible native paragraph after scrolling")
     }
 
     private fun screenBounds(predicate: (SemanticsNode) -> Boolean): FloatArray {
@@ -741,7 +957,21 @@ class ArticleEditorDeviceTest {
         SystemClock.sleep(350)
         instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
             File(context.filesDir, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            File(requireNotNull(context.getExternalFilesDir("article-audit")), name).outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
             bitmap.recycle()
         }
+    }
+
+    // Use the real accessibility bounds rather than a cross-APK inline IntSize ABI.
+    private fun accessibilityTextBounds(text: String): FloatArray {
+        fun find(node: android.view.accessibility.AccessibilityNodeInfo): android.graphics.Rect? {
+            if (node.text?.toString() == text) return android.graphics.Rect().also { node.getBoundsInScreen(it) }
+            for (index in 0 until node.childCount) node.getChild(index)?.let { find(it)?.let { bounds -> return bounds } }
+            return null
+        }
+        val rect = requireNotNull(instrumentation.uiAutomation.rootInActiveWindow?.let(::find)) { "Missing accessibility text: $text" }
+        return floatArrayOf(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat())
     }
 }

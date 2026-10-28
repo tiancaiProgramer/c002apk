@@ -17,8 +17,7 @@ import com.example.c001apk.compose.ui.base.BaseViewModel
 import com.example.c001apk.compose.ui.base.LikeType
 import com.example.c001apk.compose.ui.history.HistoryType
 import com.example.c001apk.compose.util.CookieUtil
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.example.c001apk.compose.util.ArticleContentParser
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
@@ -102,18 +101,12 @@ class FeedViewModel @AssistedInject constructor(
                         feedTypeName = response.feedTypeName.orEmpty()
                         feedType = response.feedType.orEmpty()
 
-                        if (response.messageRawOutput != "null") {
-                            val listType =
-                                object : TypeToken<List<FeedArticleContentBean?>?>() {}.type
-                            val message: List<FeedArticleContentBean> =
-                                Gson().fromJson(response.messageRawOutput, listType)
-
-                            articleList = message.filter {
-                                it.type in listOf("text", "image", "shareUrl")
-                            }
+                        articleList = ArticleContentParser.parse(response.messageRawOutput)
+                        itemSize = 2
+                        if (!articleList.isNullOrEmpty()) {
 
                             if (!response.messageCover.isNullOrEmpty()) itemSize++
-                            if (!response.title.isNullOrEmpty()) itemSize++
+                            if (!response.messageTitle.isNullOrEmpty() || !response.title.isNullOrEmpty()) itemSize++
                             if (response.targetRow != null || !response.relationRows.isNullOrEmpty())
                                 itemSize++
                             itemSize += articleList?.size ?: 0

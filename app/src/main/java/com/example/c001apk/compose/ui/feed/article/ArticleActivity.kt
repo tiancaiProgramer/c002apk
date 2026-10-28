@@ -379,7 +379,10 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
 
     if (confirmPublish) {
         AlertDialog(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), onDismissRequest = { confirmPublish = false }, title = { Text("发布图文") },
-            text = { Text(if (draft.onlySelf) "发布后仅自己可见，是否继续？" else "图文将公开发布，是否继续？") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(if (draft.onlySelf) "发布后仅自己可见，是否继续？" else "图文将公开发布，是否继续？")
+                Text("正文过短时，酷安可能将图文转为普通动态，导致混排及图片说明丢失。发布后会核验排版，未确认完整时保留草稿。")
+            } },
             confirmButton = { TextButton(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), onClick = { confirmPublish = false; preview = false; viewModel.publish() }) { Text("发布") } },
             dismissButton = { TextButton(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), onClick = { confirmPublish = false }) { Text("取消") } })
     }
@@ -408,7 +411,9 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
             dismissButton = { TextButton(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), enabled = !state.busy, onClick = viewModel::cancelCaptcha) { Text("取消") } })
     }
     state.createdId?.let {
-        AlertDialog(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), onDismissRequest = onBack, title = { Text("发布成功") }, text = { Text("图文已发布，本机草稿已清除。") },
+        AlertDialog(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), onDismissRequest = onBack,
+            title = { Text(if (state.publicationWarning == null) "发布成功" else "发布结果需检查") },
+            text = { Text(state.publicationWarning ?: "图文已发布，混排及图片说明核验通过，本机草稿已清除。") },
             confirmButton = { TextButton(shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp), onClick = onBack) { Text("完成") } })
     }
 }
