@@ -34,7 +34,7 @@
 
 ## 验证范围
 
-- 当前本地候选为 `0.1.5-article-preview.8` / versionCode 269；尚未推送 GitHub。46 项 JVM 测试通过。MIX Fold 3 外屏（1080×2520）最终优化测试包运行 10 项设备用例：9 项通过、1 项假设跳过、0 项失败。
+- 正常发布包为 `0.1.5` / versionCode 270，包含已验收 `.8` 的应用代码。46 项 JVM 测试通过。MIX Fold 3 外屏（1080×2520）最终优化测试包运行 10 项设备用例：9 项通过、1 项假设跳过、0 项失败。
 - `.8` 在键盘高度逐帧增加时直接调整光标可见区域，取消键盘结束后的第二段缓动；竖屏动画记录与限制见 [键盘同步检查](ARTICLE_IME_ANIMATION.md)。
 - 跳过项是测试 APK 内单独重建的加号菜单组件夹具，与 R8 后目标包的 Compose 桥接不兼容；该菜单定位与分隔线已在先前 Debug 检查通过，不把本次跳过计为通过。
 - 本次增加可见段落编辑、输入法打开后焦点保持、正文连续拖动及新增文字光标可见检查；同时复测光标选区插图、表情与键盘双向切换、动态样式采样、混排预览及草稿重建恢复。
@@ -44,12 +44,12 @@
 - JVM 测试覆盖交替段落顺序、特殊字符、题图/标题独立字段、图片身份关联、缺图拦截、草稿序列化与排序及可见范围。真实账号的图片上传、服务端创建、发布后读回及验证码分支仍需验收。
 - 先前浅色/深色及菜单的 UI 检查仍见 [一致性检查](ARTICLE_UI_AUDIT.md)。展开屏、横屏、其他字体缩放和输入法未完成专项。
 
-## 构建候选
+## 构建
 
 使用仓库既有的外部签名配置，不把 keystore 或密码写入源码：
 
 ```sh
-./gradlew :app:assembleRelease -PreleaseVersionName=0.1.5-article-preview.8 -PreleaseVersionCode=269
+./gradlew :app:assembleRelease -PreleaseVersionName=0.1.5 -PreleaseVersionCode=270
 ```
 
 优化独立测试包（保留正常发布包和原版，不覆盖其包名）：
@@ -58,7 +58,7 @@
 ./gradlew :app:assembleRelease :app:assembleReleaseAndroidTest \
   -ParticlePerformanceTest=true \
   -PtestApplicationId=com.example.c001apk.replyfix.articletest \
-  -PreleaseVersionName=0.1.5-article-preview.8 -PreleaseVersionCode=269
+  -PreleaseVersionName=0.1.5 -PreleaseVersionCode=270
 ```
 
 `articlePerformanceTest` 只允许上述专用包名，启用独立的测试 API 保留规则和 DUMP 保护入口；不能用来构建正常包名。普通发布不传这两个测试参数。测试包同样启用 R8 且不可调试，额外保留的测试契约会使其略大于普通包。
