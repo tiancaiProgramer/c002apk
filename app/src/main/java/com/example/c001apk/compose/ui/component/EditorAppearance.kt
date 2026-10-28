@@ -34,6 +34,12 @@ internal object EditorAppearance {
         MaterialColors.getColor(context, com.google.android.material.R.attr.colorSurface, 0)
     else ContextCompat.getColor(context, R.color.color_surface)
 
+    fun control(context: Context): Int = MaterialColors.getColor(context,
+        com.google.android.material.R.attr.colorControlNormal, 0)
+
+    fun divider(context: Context): Int = MaterialColors.getColor(context,
+        com.google.android.material.R.attr.colorSurfaceVariant, 0)
+
     fun primaryDark(context: Context, primary: Int = primary(context)): Int = if (CookieUtil.materialYou)
         MaterialColors.getColor(context, com.google.android.material.R.attr.colorPrimaryDark, primary)
     else ColorUtils.blendARGB(primary, android.graphics.Color.BLACK, 0.2f)

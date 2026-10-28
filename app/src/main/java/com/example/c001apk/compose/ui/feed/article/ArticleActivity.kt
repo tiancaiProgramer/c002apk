@@ -134,6 +134,7 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     var discard by remember { mutableStateOf(false) }
     var confirmPublish by rememberSaveable { mutableStateOf(false) }
     var showEmoji by rememberSaveable { mutableStateOf(false) }
+    var switchingToEmoji by rememberSaveable { mutableStateOf(false) }
     var returningToKeyboard by rememberSaveable { mutableStateOf(false) }
     var observedKeyboardHeight by rememberSaveable { mutableIntStateOf(0) }
     var previousImeHeight by remember { mutableIntStateOf(0) }
@@ -149,15 +150,18 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     val emojiHeight = observedKeyboardHeight.takeIf { it > 0 } ?: savedKeyboardHeight
     LaunchedEffect(coveredImeHeight) {
         if (coveredImeHeight > previousImeHeight) {
-            if (showEmoji) { showEmoji = false; returningToKeyboard = true }
-            if (!returningToKeyboard) observedKeyboardHeight = coveredImeHeight
+            // Late frames from the keyboard we are dismissing must not cancel
+            // the user's explicit request to open the emoji panel.
+            if (showEmoji && !switchingToEmoji) { showEmoji = false; returningToKeyboard = true }
+            if (!returningToKeyboard && !switchingToEmoji) observedKeyboardHeight = coveredImeHeight
         }
         previousImeHeight = coveredImeHeight
         if (returningToKeyboard && coveredImeHeight >= emojiHeight && coveredImeHeight > 0) returningToKeyboard = false
     }
-    LaunchedEffect(coveredImeHeight, returningToKeyboard) {
+    LaunchedEffect(coveredImeHeight, returningToKeyboard, switchingToEmoji) {
         delay(200)
-        if (coveredImeHeight > 0) { observedKeyboardHeight = coveredImeHeight; returningToKeyboard = false }
+        if (switchingToEmoji && coveredImeHeight == 0) switchingToEmoji = false
+        else if (coveredImeHeight > 0 && !switchingToEmoji) { observedKeyboardHeight = coveredImeHeight; returningToKeyboard = false }
         else if (returningToKeyboard) { delay(200); returningToKeyboard = false }
     }
     fun hideKeyboard() {
@@ -175,6 +179,9 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     val enabled = state.ready && !state.busy && state.createdId == null
     val canPublish = enabled && draft.title.isNotBlank() && draft.blocks.any { it.type == "text" && it.text.isNotBlank() }
     val panelColor = MaterialTheme.colorScheme.surfaceContainer
+    val editorContext = rememberEditorViewContext()
+    val controlColor = Color(EditorAppearance.control(editorContext))
+    val dividerColor = Color(EditorAppearance.divider(editorContext))
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
         viewModel.importImages(it)
     }
@@ -200,7 +207,7 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
     }
 
     BackHandler {
-        if (showEmoji || returningToKeyboard) { showEmoji = false; returningToKeyboard = false; hideKeyboard() }
+        if (showEmoji || returningToKeyboard) { showEmoji = false; switchingToEmoji = false; returningToKeyboard = false; hideKeyboard() }
         else if (coveredImeHeight > 0) hideKeyboard()
         else if (preview && !state.busy) preview = false else onBack()
     }
@@ -246,18 +253,23 @@ private fun ArticleEditor(viewModel: ArticleViewModel, onBack: () -> Unit) {
                                     onValueChange = { value -> viewModel.edit { it.copy(onlySelf = value) } })
                                 .padding(start = 10.dp, end = 16.dp).height(48.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Checkbox(checked = draft.onlySelf, enabled = enabled, onCheckedChange = null,
+                                    colors = CheckboxDefaults.colors(uncheckedColor = controlColor),
                                     modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(8.dp))
                                 Text("仅自己可见", style = MaterialTheme.typography.bodyMedium)
                             }
-                            HorizontalDivider()
+                            HorizontalDivider(color = dividerColor)
                             if (state.busy) {
                                 LinearProgressIndicator(Modifier.fillMaxWidth())
                                 Text(state.progress, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                             } else {
                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                     ArticleToolButton(R.drawable.outline_emoji_emotions_24, "表情", enabled) {
-                                        if (showEmoji) { showEmoji = false; returningToKeyboard = true; showKeyboard() }
-                                        else { returningToKeyboard = false; showEmoji = true; hideKeyboard() }
+                                        if (showEmoji) { showEmoji = false; switchingToEmoji = false; returningToKeyboard = true; showKeyboard() }
+                                        else {
+                                            observedKeyboardHeight = maxOf(observedKeyboardHeight, coveredImeHeight)
+                                            returningToKeyboard = false; switchingToEmoji = true; showEmoji = true; hideKeyboard()
+                                        }
                                     }
                                     ArticleToolButton(R.drawable.outline_image_24, "插入图片", enabled) { pickAtCursor(false) }
                                     ArticleToolButton(R.drawable.outline_note_alt_24, "从文件插入图片", enabled) { pickAtCursor(true) }
@@ -405,6 +417,7 @@ private fun ArticlePanel(content: @Composable () -> Unit) {
 
 @Composable
 private fun RowScope.ArticleToolButton(drawable: Int, label: String, enabled: Boolean, onClick: () -> Unit) {
+    val tint = Color(EditorAppearance.control(rememberEditorViewContext()))
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
     val overshoot = remember { android.view.animation.OvershootInterpolator() }
@@ -417,7 +430,7 @@ private fun RowScope.ArticleToolButton(drawable: Int, label: String, enabled: Bo
         shape = RoundedCornerShape(EditorAppearance.CONTROL_CORNER_DP.dp),
         colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color.Transparent,
             disabledContainerColor = Color.Transparent)) {
-        Icon(painterResource(drawable), label, modifier = Modifier.size(24.dp))
+        Icon(painterResource(drawable), label, modifier = Modifier.size(24.dp), tint = tint)
     }
 }
 

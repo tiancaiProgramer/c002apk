@@ -221,6 +221,74 @@ class ArticleEditorDeviceTest {
         }
     }
 
+    @Test fun keyboardEmojiSwitchKeepsTextAndReturnsToKeyboard() {
+        store.save(ArticleDraft(title = "键盘切换测试", blocks = listOf(ArticleBlock(id = "keyboard", text = "正文"))))
+        launchEditor().use { scenario ->
+            waitText("正文")
+            lateinit var editor: android.widget.EditText
+            scenario.onActivity { activity ->
+                fun find(view: View): android.widget.EditText? {
+                    if (view is android.widget.EditText && view.text.toString() == "正文") return view
+                    if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+                    return null
+                }
+                editor = requireNotNull(find(activity.window.decorView))
+                editor.requestFocus(); editor.setSelection(editor.length())
+                editor.post { activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(editor, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+            }
+            fun imeVisible() = androidx.core.view.ViewCompat.getRootWindowInsets(editor)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+            waitUi("keyboard opens") { imeVisible() }
+            screenshot("article-keyboard.png")
+            click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("表情") == true }
+            waitUi("emoji replaces keyboard") { !imeVisible() }
+            waitText("默认")
+            fun grid(view: View): android.widget.GridView? {
+                if (view is android.widget.GridView && view.isShown && view.childCount > 0 &&
+                    view.getGlobalVisibleRect(android.graphics.Rect()) && view.getChildAt(0)?.hasOnClickListeners() == true) return view
+                if (view is ViewGroup) for (i in 0 until view.childCount) grid(view.getChildAt(i))?.let { return it }
+                return null
+            }
+            waitUi("visible emoji page laid out") { roots.any { grid(it.view) != null } }
+            instrumentation.runOnMainSync {
+                val visibleGrid = requireNotNull(roots.firstNotNullOfOrNull { grid(it.view) })
+                assertTrue(visibleGrid.getChildAt(0).performClick())
+            }
+            waitUi("emoji inserted without opening keyboard") { editor.text.toString().startsWith("正文[") && !imeVisible() }
+            screenshot("article-emoji-inserted.png")
+            click { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("表情") == true }
+            waitUi("keyboard returns") { imeVisible() }
+            screenshot("article-keyboard-return.png")
+            assertTrue(store.read().blocks.first().text.startsWith("正文["))
+        }
+    }
+
+    private fun waitUi(description: String, predicate: () -> Boolean) {
+        val deadline = SystemClock.elapsedRealtime() + 8000
+        while (SystemClock.elapsedRealtime() < deadline) {
+            var ready = false
+            instrumentation.runOnMainSync { ready = predicate() }
+            if (ready) { SystemClock.sleep(250); return }
+            SystemClock.sleep(50)
+        }
+        screenshot("article-ui-timeout.png")
+        instrumentation.runOnMainSync {
+            val details = mutableListOf<Map<String, Any?>>()
+            fun record(view: View) {
+                val rect = android.graphics.Rect()
+                details.add(mapOf("class" to view.javaClass.name, "width" to view.width, "height" to view.height,
+                    "shown" to view.isShown, "global_visible" to view.getGlobalVisibleRect(rect), "bounds" to rect.toShortString(),
+                    "click" to view.hasOnClickListeners(), "children" to (view as? ViewGroup)?.childCount,
+                    "ime_visible" to androidx.core.view.ViewCompat.getRootWindowInsets(view)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())))
+                if (view is ViewGroup) for (i in 0 until view.childCount) record(view.getChildAt(i))
+            }
+            roots.forEach { record(it.view) }
+            File(context.filesDir, "article-ui-timeout.json").writeText(Gson().toJson(details))
+        }
+        error("Timed out: $description")
+    }
+
     private fun launchEditor(): EditorHost {
         val monitor = instrumentation.addMonitor(ArticleActivity::class.java.name, null, false)
         // Some vendor ROMs silently block instrumentation's app-origin activity launch.

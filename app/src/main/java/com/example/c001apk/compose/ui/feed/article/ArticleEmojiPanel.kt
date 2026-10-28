@@ -60,7 +60,9 @@ private class NativeArticleEmojiPanel(
     private val pager = ViewPager2(context)
     private val labels = ArrayList<TextView>()
     private var previousRecent: List<String>? = null
-    private val adapter = EmojiPagerAdapter(listOf(recentPages, EmojiUtils.emojiList, EmojiUtils.coolBList), onSelect, startDelete, stopDelete)
+    // Original cells are 48dp with three 4dp row gaps (four rows).
+    private val adapter = EmojiPagerAdapter(listOf(recentPages, EmojiUtils.emojiList, EmojiUtils.coolBList),
+        onSelect, startDelete, stopDelete, pageHeightPx = px(4 * 48 + 3 * 4))
     private fun px(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     init {

@@ -12,7 +12,8 @@ class EmojiPagerAdapter(
     private val emojiList: List<List<List<Pair<String, Int>>>>,
     private val onClickEmoji: (String) -> Unit,
     private val onCountStart: () -> Unit,
-    private val onCountStop: () -> Unit
+    private val onCountStop: () -> Unit,
+    private val pageHeightPx: Int? = null,
 ) : RecyclerView.Adapter<EmojiPagerAdapter.ViewHolder>() {
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -30,6 +31,12 @@ class EmojiPagerAdapter(
     override fun getItemCount() = emojiList.size
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        // An exact content height also measures ViewPager2's inner RecyclerView.
+        // minimumHeight alone can leave that child at zero after an IME transition.
+        // No override is applied to the existing dynamic editor.
+        pageHeightPx?.let { height ->
+            holder.viewPager.layoutParams = holder.viewPager.layoutParams.apply { this.height = height }
+        }
         holder.viewPager.adapter = EmojiChildPagerAdapter(
             emojiList[position], onClickEmoji, onCountStart, onCountStop
         )
